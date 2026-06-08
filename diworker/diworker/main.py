@@ -40,14 +40,6 @@ LOG = logging.getLogger(__name__)
 ENVIRONMENT_CLOUD_TYPE = 'environment'
 HEARTBEAT_INTERVAL = 300
 DEFAULT_MAX_WORKERS = 4
-DEFAULT_MAX_TENANT_WORKERS = 1
-
-
-def _is_rate_limit_exc(exc):
-    if getattr(exc, 'status_code', None) == 429:
-        return True
-    msg = str(exc).lower()
-    return '429' in msg or 'toomanyrequests' in msg or 'too many requests' in msg
 
 
 class DIWorker(ConsumerMixin):
@@ -176,9 +168,7 @@ class DIWorker(ConsumerMixin):
             'mongo_resources': mongo_cl.restapi['resources'],
             'clickhouse_cl': clickhouse_cl,
             'import_file': import_dict.get('import_file'),
-            'recalculate': is_recalculation,
-            'max_tenant_concurrent': int(self.diworker_settings.get(
-                'max_tenant_import_workers', DEFAULT_MAX_TENANT_WORKERS))}
+            'recalculate': is_recalculation}
         importer = None
         ca = None
         previous_attempt_ts = 0
@@ -230,13 +220,11 @@ class DIWorker(ConsumerMixin):
             if not importer:
                 importer = BaseReportImporter(**importer_params)
             importer.update_cloud_import_attempt(now, reason)
-            self.send_report_failed_email(
-                ca, previous_attempt_ts, now,
-                is_throttled=_is_rate_limit_exc(exc))
+            self.send_report_failed_email(ca, previous_attempt_ts, now)
             raise
 
     def send_report_failed_email(self, cloud_account, previous_attempt_ts,
-                                 now, is_throttled=False):
+                                 now):
         last_import_at = cloud_account['last_import_at']
         if not last_import_at:
             last_import_at = cloud_account['created_at']
@@ -248,11 +236,9 @@ class DIWorker(ConsumerMixin):
                     utcfromtimestamp(now)):
                 # email already sent today during previous report import fails
                 return
-        action = ('report_import_throttled' if is_throttled
-                  else 'report_import_failed')
         self.publish_activities_task(
             cloud_account['organization_id'], cloud_account['id'],
-            'cloud_account', action,
+            'cloud_account', 'report_import_failed',
             'organization.report_import.failed')
 
     def process_task(self, body, message):
