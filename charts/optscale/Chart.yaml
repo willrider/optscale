@@ -1,0 +1,27 @@
+apiVersion: v2
+name: optscale
+description: >-
+  OptScale — FinOps and cloud cost management platform by Hystax.
+  Deploys the full OptScale stack: REST API, auth, UI, report import
+  pipeline, recommendation engines, schedulers and the backing
+  databases (MariaDB, MongoDB, ClickHouse, InfluxDB, etcd, RabbitMQ,
+  Redis, MinIO) plus Thanos-based metrics storage.
+type: application
+version: 1.0.0
+appVersion: "2026080701-public"
+kubeVersion: ">=1.25.0-0"
+home: https://hystax.com/optscale
+icon: https://raw.githubusercontent.com/hystax/optscale/integration/ngui/ui/public/favicon.ico
+sources:
+  - https://github.com/hystax/optscale
+keywords:
+  - finops
+  - cloud-cost
+  - cost-management
+  - cost-optimization
+  - hystax
+maintainers:
+  - name: Hystax
+    url: https://github.com/hystax
+annotations:
+  artifacthub.io/license: Apache-2.0

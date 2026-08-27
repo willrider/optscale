@@ -1,0 +1,54 @@
+{{- /*
+Kicks off billing report imports through the REST API on several cadences —
+one CronJob per entry in reportImport.schedules.
+*/}}
+{{- $root := . }}
+{{- $cfg := .Values.reportImport }}
+{{- range $period, $schedule := $cfg.schedules }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: report-import-scheduler-{{ $period }}
+  labels:
+    {{- include "optscale.labels" (dict "root" $root "name" (printf "report-import-scheduler-%s" $period)) | nindent 4 }}
+spec:
+  schedule: {{ $schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ $cfg.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ $root.Values.cronDefaults.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $root.Values.cronDefaults.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "optscale.selectorLabels" (dict "root" $root "name" (printf "report-import-scheduler-%s" $period)) | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          initContainers:
+            {{- include "optscale.waitFor" (dict "root" $root "waitFor" (list "restapi")) | nindent 12 }}
+          containers:
+            - name: report-import
+              image: {{ $cfg.image | quote }}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: PERIOD
+                  value: {{ $period | quote }}
+                - name: CLUSTER_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "optscale.clusterSecretName" $root }}
+                      key: cluster_secret
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  curl -sS -X POST -f \
+                    -H "Content-Type: application/json" \
+                    -H "Secret: $CLUSTER_SECRET" \
+                    -d "{\"period\": $PERIOD}" \
+                    "http://{{ $root.Values.apis.restapi.name }}:{{ $root.Values.apis.restapi.servicePort }}/restapi/v2/schedule_imports"
+          {{- include "optscale.podScheduling" (dict "root" $root) | nindent 10 }}
+{{- end }}

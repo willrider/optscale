@@ -1,0 +1,83 @@
+{{- $hook := .Values.configurator.argocdHook }}
+{{- $name := ternary "configurator" (printf "configurator-r%d" .Release.Revision) $hook }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "configurator") | nindent 4 }}
+  annotations:
+    {{- if $hook }}
+    # Run as an Argo CD Sync-phase hook: recreated on every sync, never
+    # tracked as live state (plain Jobs are immutable and .Release.Revision
+    # is always 1 under Argo CD).
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    {{- end }}
+    {{- if not .Values.configurator.existingConfigSecret }}
+    checksum/config: {{ include "optscale.configYaml" . | sha256sum }}
+    {{- end }}
+spec:
+  backoffLimit: {{ .Values.configurator.backoffLimit }}
+  {{- if not $hook }}
+  ttlSecondsAfterFinished: {{ .Values.configurator.ttlSecondsAfterFinished }}
+  {{- end }}
+  template:
+    metadata:
+      name: {{ $name }}
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" "configurator") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "etcd" "mariadb" "mongo" "rabbitmq" "influxdb" "minio")) | nindent 8 }}
+      containers:
+        - name: configurator
+          image: {{ include "optscale.image" (dict "root" . "repo" .Values.configurator.image "tag" .Values.configurator.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          # The released configurator cannot replace etcd keys that changed
+          # from leaf to directory (or vice versa), so recursively drop the
+          # rewritable telemetry branches before it runs — mirrors the
+          # workaround in optscale-deploy/compose/docker-compose.yml.
+          command:
+            - sh
+            - -ec
+            - |
+              uv --project docker_images/configurator run python - <<'PY'
+              import os
+              import etcd
+              from optscale_client.config_client.client import Client
+
+              client = Client(
+                  host=os.environ["HX_ETCD_HOST"],
+                  port=int(os.environ["HX_ETCD_PORT"]),
+              )
+              for key in (
+                  "/opentelemetry",
+                  "/auth/opentelemetry",
+                  "/restapi/opentelemetry",
+                  "/diworker/opentelemetry",
+              ):
+                  try:
+                      client.delete(key, recursive=True)
+                  except etcd.EtcdKeyNotFound:
+                      pass
+              PY
+              uv --project docker_images/configurator run python3 docker_images/configurator/configurator.py /config/config
+          env:
+            {{- include "optscale.etcdEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+              readOnly: true
+          {{- with .Values.configurator.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config-volume
+          secret:
+            secretName: {{ include "optscale.configSecretName" . }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}

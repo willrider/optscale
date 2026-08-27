@@ -1,0 +1,114 @@
+{{- if .Values.grafana.enabled }}
+{{- $cfg := .Values.grafana }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-secret
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+type: Opaque
+data:
+  htpasswd-user: {{ $cfg.user | b64enc | quote }}
+  htpasswd-pass: {{ $cfg.password | b64enc | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: {{ $cfg.service.type }}
+  ports:
+    - port: {{ $cfg.service.port }}
+      targetPort: nginx
+      protocol: TCP
+      name: {{ $cfg.name }}
+      {{- if and (eq $cfg.service.type "NodePort") $cfg.service.nodePort }}
+      nodePort: {{ $cfg.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "influxdb")) | nindent 8 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: grafana
+              containerPort: {{ $cfg.port }}
+          env:
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_USERS_AUTO_ASSIGN_ORG
+              value: "true"
+            - name: GF_USERS_AUTO_ASSIGN_ORG_ROLE
+              value: Editor
+            - name: GF_AUTH_PROXY_ENABLED
+              value: "true"
+            - name: GF_AUTH_PROXY_HEADER_NAME
+              value: X-WEBAUTH-USER
+            - name: GF_AUTH_PROXY_HEADER_PROPERTY
+              value: username
+            - name: GF_AUTH_PROXY_AUTO_SIGN_UP
+              value: "true"
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            - name: GF_AUTH_DISABLE_SIGNOUT_MENU
+              value: "true"
+            - name: GF_AUTH_BASIC_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: grafana-dashboards
+              mountPath: /var/lib/grafana/dashboards
+        - name: grafana-nginx
+          image: {{ include "optscale.image" (dict "root" . "repo" $cfg.nginxImage "tag" $cfg.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: nginx
+              containerPort: 80
+          env:
+            - name: HTPASSWD_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secret
+                  key: htpasswd-user
+            - name: HTPASSWD_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secret
+                  key: htpasswd-pass
+          readinessProbe:
+            tcpSocket:
+              port: nginx
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: grafana-dashboards
+          emptyDir: {}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+{{- end }}

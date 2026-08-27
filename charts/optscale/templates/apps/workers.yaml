@@ -1,0 +1,60 @@
+{{- /*
+Renders a Deployment (no Service) for every entry in .Values.workers.
+Entries with stripeOnly: true are skipped unless config.stripe.enabled.
+*/}}
+{{- $root := . }}
+{{- range $key, $cfg := .Values.workers }}
+{{- $enabled := eq (include "optscale.flag" (dict "map" $cfg "key" "enabled" "default" true)) "true" }}
+{{- if and $enabled
+           (or (not ($cfg.stripeOnly | default false)) $root.Values.config.stripe.enabled) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" $root "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" $root "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" $root "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" $root | nindent 6 }}
+      {{- $waits := include "optscale.waitFor" (dict "root" $root "waitFor" $cfg.waitFor) }}
+      {{- if trim $waits }}
+      initContainers:
+        {{- $waits | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ include "optscale.image" (dict "root" $root "repo" $cfg.image "tag" $cfg.imageTag) | quote }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          env:
+            {{- include "optscale.etcdEnv" $root | nindent 12 }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ $cfg.name | quote }}
+            - name: OTEL_SERVICE_VERSION
+              value: {{ $cfg.imageTag | default (include "optscale.tag" $root) | quote }}
+            {{- include "optscale.extraEnv" (dict "root" $root "env" $cfg.extraEnv) | nindent 12 }}
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cfg.cacheVolume }}
+          volumeMounts:
+            - name: cache
+              mountPath: {{ .mountPath }}
+          {{- end }}
+      {{- if $cfg.cacheVolume }}
+      volumes:
+        - name: cache
+          emptyDir: {}
+      {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" $root "comp" $cfg) | nindent 6 }}
+{{- end }}
+{{- end }}

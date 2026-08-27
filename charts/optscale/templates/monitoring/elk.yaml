@@ -1,0 +1,246 @@
+{{- if .Values.elk.enabled }}
+{{- $cfg := .Values.elk }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: elastic
+      port: {{ $cfg.elasticPort }}
+      targetPort: elastic
+    - name: logstash-tcp
+      port: {{ $cfg.logstashTcpPort }}
+      targetPort: logstash-tcp
+      protocol: TCP
+    - name: logstash-udp
+      port: {{ $cfg.logstashUdpPort }}
+      targetPort: logstash-udp
+      protocol: UDP
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elkservice
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: {{ $cfg.kibana.service.type }}
+  ports:
+    - name: kibana
+      port: {{ $cfg.kibana.service.port }}
+      targetPort: kibana
+      {{- if and (eq $cfg.kibana.service.type "NodePort") $cfg.kibana.service.nodePort }}
+      nodePort: {{ $cfg.kibana.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $cfg.name }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: ES_CONNECT_RETRY
+              value: {{ $cfg.esConnectRetry | quote }}
+            - name: LS_HEAP_SIZE
+              value: {{ $cfg.lsHeapSize | quote }}
+            - name: ES_HEAP_SIZE
+              value: {{ $cfg.esHeapSize | quote }}
+            - name: HTPASSWD_USER
+              value: {{ $cfg.htpasswdUser | quote }}
+            - name: HTPASSWD_PASS
+              value: {{ $cfg.htpasswdPass | quote }}
+          ports:
+            - name: logstash-udp
+              containerPort: {{ $cfg.logstashUdpPort }}
+              protocol: UDP
+            - name: elastic
+              containerPort: {{ $cfg.elasticPort }}
+            - name: logstash-tcp
+              containerPort: {{ $cfg.logstashTcpPort }}
+              protocol: TCP
+            - name: kibana
+              containerPort: 80
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/elasticsearch
+      {{- if not $cfg.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+  {{- if $cfg.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($cfg.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cfg.persistence.size }}
+  {{- end }}
+{{- if $cfg.filebeat.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "filebeat") | nindent 4 }}
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: log
+        enabled: true
+        symlinks: true
+        paths:
+          - /var/log/containers/*.log
+        exclude_files:
+          - 'filebeat.*'
+          - 'logstash.*'
+          - 'azure.*'
+          - 'kube.*'
+          - 'ignite.*'
+          - 'influx.*'
+          - 'prometheus.*'
+          - 'rkubelog.*'
+          - 'node-exporter.*'
+        processors:
+          - dissect:
+              tokenizer: "/var/log/containers/%{container_info}.log"
+              field: "log.file.path"
+              target_prefix: ""
+          - dissect:
+              tokenizer: "%{header} F %{parsed}"
+              field: "message"
+              target_prefix: ""
+              when:
+                contains:
+                  message: " F "
+    output.logstash:
+      hosts: ["${LOGSTASH_HOST}:${LOGSTASH_PORT}"]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "filebeat") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" "filebeat") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" "filebeat") | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 0
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: filebeat
+          image: {{ include "optscale.image" (dict "root" . "repo" $cfg.filebeat.image "tag" $cfg.filebeat.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["-c", "/etc/filebeat.yml", "-e"]
+          env:
+            - name: LOGSTASH_HOST
+              value: {{ $cfg.name | quote }}
+            - name: LOGSTASH_PORT
+              value: {{ $cfg.logstashTcpPort | quote }}
+          {{- with $cfg.filebeat.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/filebeat.yml
+              subPath: filebeat.yml
+            - name: data
+              mountPath: /usr/share/filebeat/data
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: filebeat-config
+            defaultMode: 0600
+        - name: data
+          hostPath:
+            path: /var/lib/filebeat-optscale-data
+            type: DirectoryOrCreate
+        - name: varlog
+          hostPath:
+            path: /var/log
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+{{- end }}
+{{- if $cfg.cleanelkdb.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanelkdb
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "cleanelkdb") | nindent 4 }}
+spec:
+  schedule: {{ $cfg.cleanelkdb.schedule | quote }}
+  {{- include "optscale.cronPolicy" . | nindent 2 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "optscale.selectorLabels" (dict "root" . "name" "cleanelkdb") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- include "optscale.imagePullSecrets" . | nindent 10 }}
+          containers:
+            - name: cleanelkdb
+              image: {{ include "optscale.image" (dict "root" . "repo" $cfg.cleanelkdb.image) | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              env:
+                - name: HX_ELK_LOG_MAX_SIZE
+                  value: {{ $cfg.cleanelkdb.logMaxSizeMb | quote }}
+                - name: HX_ELK_URL
+                  value: {{ $cfg.name | quote }}
+                - name: HX_ELK_PORT
+                  value: {{ $cfg.elasticPort | quote }}
+          {{- include "optscale.podScheduling" (dict "root" .) | nindent 10 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,134 @@
+{{- if .Values.tempo.enabled }}
+{{- $cfg := .Values.tempo }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+data:
+  tempo.yaml: |
+    multitenancy_enabled: false
+    server:
+      http_listen_port: {{ $cfg.queryPort }}
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:{{ $cfg.otlpGrpcPort }}
+            http:
+              endpoint: 0.0.0.0:{{ $cfg.otlpHttpPort }}
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+    storage:
+      trace:
+        backend: local
+        wal:
+          path: /var/tempo/wal
+        local:
+          path: /var/tempo/traces
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: tempo-query
+      port: {{ $cfg.queryPort }}
+      targetPort: query
+    - name: otlp-grpc
+      port: {{ $cfg.otlpGrpcPort }}
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: {{ $cfg.otlpHttpPort }}
+      targetPort: otlp-http
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+      annotations:
+        checksum/config: {{ printf "%v-%v-%v" $cfg.queryPort $cfg.otlpGrpcPort $cfg.otlpHttpPort | sha256sum }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $cfg.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/tempo/tempo.yaml
+          ports:
+            - name: query
+              containerPort: {{ $cfg.queryPort }}
+            - name: otlp-grpc
+              containerPort: {{ $cfg.otlpGrpcPort }}
+            - name: otlp-http
+              containerPort: {{ $cfg.otlpHttpPort }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: query
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+            - name: storage
+              mountPath: /var/tempo
+      volumes:
+        - name: config
+          configMap:
+            name: tempo-config
+        - name: storage
+          {{- if $cfg.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: tempo-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+{{- if $cfg.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tempo-data
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with ($cfg.persistence.storageClass | default .Values.global.storageClass) }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $cfg.persistence.size }}
+{{- end }}
+{{- end }}

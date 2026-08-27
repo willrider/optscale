@@ -1,0 +1,125 @@
+{{- $cfg := .Values.katara }}
+{{- $serviceImage := include "optscale.image" (dict "root" . "repo" $cfg.serviceImage "tag" $cfg.imageTag) }}
+{{- $workerImage := include "optscale.image" (dict "root" . "repo" $cfg.workerImage "tag" $cfg.imageTag) }}
+{{- $apiName := printf "%sapi" $cfg.name }}
+{{- $schedulerName := printf "%sscheduler" $cfg.name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.servicePort }}
+      targetPort: {{ $cfg.containerPort }}
+      protocol: TCP
+      name: {{ $cfg.name }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $apiName) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $apiName }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $apiName) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $apiName) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $apiName) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "etcd" "rabbitmq" "restapi")) | nindent 8 }}
+      containers:
+        - name: {{ $apiName }}
+          image: {{ $serviceImage | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $cfg.containerPort }}
+          env:
+            {{- include "optscale.etcdEnv" . | nindent 12 }}
+            - name: HX_KATARA_ROLE
+              value: api
+          readinessProbe:
+            tcpSocket:
+              port: {{ $cfg.containerPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $schedulerName }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $schedulerName) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.scheduler.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $schedulerName) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $schedulerName) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "katara")) | nindent 8 }}
+      containers:
+        - name: {{ $schedulerName }}
+          image: {{ $serviceImage | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            {{- include "optscale.etcdEnv" . | nindent 12 }}
+            - name: HX_KATARA_ROLE
+              value: scheduler
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kataraworker
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "kataraworker") | nindent 4 }}
+spec:
+  replicas: {{ $cfg.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" "kataraworker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" "kataraworker") | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "katara")) | nindent 8 }}
+      containers:
+        - name: kataraworker
+          image: {{ $workerImage | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            {{- include "optscale.etcdEnv" . | nindent 12 }}
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}

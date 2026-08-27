@@ -1,0 +1,186 @@
+{{- $cfg := .Values.mariadb }}
+{{- $image := include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) }}
+{{- if not $cfg.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-secret
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+type: Opaque
+data:
+  password: {{ $cfg.rootPassword | b64enc | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config-vol
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+data:
+  mariadb.cnf: |
+    [mysqld]
+    innodb_file_format = BARRACUDA
+    innodb_large_prefix = 1
+    innodb_file_per_table = 1
+    wait_timeout = 28800
+    explicit_defaults_for_timestamp = 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.port }}
+      targetPort: mariadb
+      protocol: TCP
+      name: mariadb
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $cfg.name }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: copy-mariadb-config
+          image: {{ .Values.waitImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ['sh', '-c', 'cp /configmap/* /etc/mysql/conf.d']
+          volumeMounts:
+            - name: configmap
+              mountPath: /configmap
+            - name: config
+              mountPath: /etc/mysql/conf.d
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - --max_connections={{ $cfg.maxConnections }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "optscale.mariadb.secretName" . }}
+                  key: password
+            {{- with $cfg.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: mariadb
+              containerPort: {{ $cfg.port }}
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - mysql -h 127.0.0.1 -e "SELECT 1" -p$MYSQL_ROOT_PASSWORD
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 20
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: config
+              mountPath: /etc/mysql/conf.d
+      volumes:
+        - name: config
+          emptyDir: {}
+        - name: configmap
+          configMap:
+            name: mysql-config-vol
+        {{- if not $cfg.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+  {{- if $cfg.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($cfg.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cfg.persistence.size }}
+  {{- end }}
+{{- if $cfg.backup.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "db-backup") | nindent 4 }}
+spec:
+  schedule: {{ $cfg.backup.schedule | quote }}
+  {{- include "optscale.cronPolicy" . | nindent 2 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "optscale.selectorLabels" (dict "root" . "name" "db-backup") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- include "optscale.imagePullSecrets" . | nindent 10 }}
+          containers:
+            - name: db-backup
+              image: {{ $image | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              env:
+                - name: MYSQL_ROOT_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "optscale.mariadb.secretName" . }}
+                      key: password
+                - name: KEEP_COUNT
+                  value: {{ $cfg.backup.keep | quote }}
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+                  BACKUP_PATH=/backup
+                  mysql -h {{ $cfg.name }} -p$MYSQL_ROOT_PASSWORD -e "set global innodb_buffer_pool_dump_now = ON;"
+                  mysqldump -A -h {{ $cfg.name }} -p$MYSQL_ROOT_PASSWORD | gzip -c - > "$BACKUP_PATH/optscale_db_$(date +%s).sql.gz"
+                  mysql -h {{ $cfg.name }} -p$MYSQL_ROOT_PASSWORD -e "set global innodb_buffer_pool_load_now = ON;"
+                  ls -1 $BACKUP_PATH/* | sort | head -n -$KEEP_COUNT | xargs -d '\n' rm -f -v --
+              volumeMounts:
+                - name: backups
+                  mountPath: /backup
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ required "mariadb.backup.existingClaim is required when mariadb.backup.enabled" $cfg.backup.existingClaim }}
+          {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 10 }}
+{{- end }}

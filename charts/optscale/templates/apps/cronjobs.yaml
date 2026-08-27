@@ -1,0 +1,77 @@
+{{- /*
+Renders a CronJob for every entry in .Values.cronjobs.
+`project`/`script` generate the standard OptScale scheduler command; a
+literal `command` list can be given instead. Entries with stripeOnly: true
+are skipped unless config.stripe.enabled.
+*/}}
+{{- $root := . }}
+{{- range $key, $cfg := .Values.cronjobs }}
+{{- $enabled := eq (include "optscale.flag" (dict "map" $cfg "key" "enabled" "default" true)) "true" }}
+{{- if and $enabled
+           (or (not ($cfg.stripeOnly | default false)) $root.Values.config.stripe.enabled) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" $root "name" $cfg.name) | nindent 4 }}
+spec:
+  schedule: {{ $cfg.schedule | quote }}
+  {{- include "optscale.cronPolicy" $root | nindent 2 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "optscale.selectorLabels" (dict "root" $root "name" $cfg.name) | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- include "optscale.imagePullSecrets" $root | nindent 10 }}
+          {{- $waits := include "optscale.waitFor" (dict "root" $root "waitFor" $cfg.waitFor) }}
+          {{- if trim $waits }}
+          initContainers:
+            {{- $waits | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: {{ $cfg.name }}
+              image: {{ include "optscale.image" (dict "root" $root "repo" $cfg.image "tag" $cfg.imageTag) | quote }}
+              imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+              {{- if $cfg.command }}
+              command:
+                {{- toYaml $cfg.command | nindent 16 }}
+              {{- else if $cfg.project }}
+              command:
+                - uv
+                - --project
+                - docker_images/{{ $cfg.project }}
+                - run
+                - python3
+                - docker_images/{{ $cfg.project }}/{{ $cfg.script | default "scheduler.py" }}
+              {{- end }}
+              env:
+                {{- include "optscale.etcdEnv" $root | nindent 16 }}
+                {{- include "optscale.extraEnv" (dict "root" $root "env" $cfg.extraEnv) | nindent 16 }}
+              {{- with $cfg.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with $cfg.archiveVolume }}
+              volumeMounts:
+                - name: archive
+                  mountPath: {{ .mountPath }}
+              {{- end }}
+          {{- if $cfg.archiveVolume }}
+          volumes:
+            - name: archive
+              {{- if $cfg.archiveVolume.existingClaim }}
+              persistentVolumeClaim:
+                claimName: {{ $cfg.archiveVolume.existingClaim }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+          {{- end }}
+          {{- include "optscale.podScheduling" (dict "root" $root "comp" $cfg) | nindent 10 }}
+{{- end }}
+{{- end }}

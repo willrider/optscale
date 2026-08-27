@@ -1,0 +1,1073 @@
+# Default values for the OptScale Helm chart.
+#
+# OptScale is configured through etcd: a configurator Job seeds etcd (and
+# creates MariaDB databases, RabbitMQ queues, MinIO buckets, ...) from the
+# rendered config in `templates/config-secret.yaml`. Application pods only
+# receive HX_ETCD_HOST / HX_ETCD_PORT and read everything else from etcd,
+# blocking at startup until the configurator has finished.
+#
+# Install one release per namespace: component Services use fixed short names
+# (restapi, auth, mariadb, ...) which are also written into etcd config.
+
+global:
+  # Registry + organization for all Hystax-built images (<registry>/<org>/<repo>:<tag>).
+  imageRegistry: docker.io
+  imageOrg: hystax
+  # Tag applied to all Hystax images. Empty means "use Chart.appVersion".
+  # Use a release tag from https://github.com/hystax/optscale/releases
+  imageTag: ""
+  imagePullPolicy: IfNotPresent
+  # e.g. imagePullSecrets: [{name: regcred}]
+  imagePullSecrets: []
+  # Default StorageClass for all persistent volumes ("" = cluster default).
+  storageClass: ""
+  clusterDomain: cluster.local
+  # Applied to all pods unless overridden per component.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Image used by "wait for dependency" init containers.
+waitImage: busybox:1.37.0
+
+##############################################################################
+# Platform configuration — everything here ends up in etcd via the
+# configurator Job. Values map 1:1 to optscale-deploy config semantics.
+##############################################################################
+config:
+  # Public IP address or DNS name of the OptScale installation. Used to build
+  # links in emails and integrations. Falls back to ingress.host when empty.
+  publicIp: ""
+  companyName: Hystax
+  productName: OptScale
+
+  secrets:
+    # Internal cluster API secret. CHANGE THIS before installing.
+    cluster: change-me-in-production
+    agent: ""
+    # Name of a pre-existing Secret with key `cluster_secret` (e.g. managed
+    # by External Secrets Operator). When set, the chart does not render the
+    # cluster-secret Secret and `cluster` above is ignored by consumers.
+    existingSecret: ""
+
+  # Encryption material for stored credentials / user data.
+  encryptionKey: ""
+  encryptionSalt: ""
+  encryptionSaltAuth: ""
+
+  # Set to true to let users log in without confirming their email address.
+  disableEmailVerification: true
+  forceAwsEdpStrip: ""
+
+  tokenExpiration: 168        # hours until an auth token expires (one week)
+  inviteExpirationDays: 30    # days before an invite URL expires
+
+  # Cloud credentials OptScale uses to fetch pricing data for recommendations.
+  # Recommendations will not work without this. Same structure as
+  # optscale-deploy/overlay/user_template.yml `service_credentials`.
+  serviceCredentials: {}
+    # aws:
+    #   access_key_id: accesskeyid
+    #   secret_access_key: secretaccesskey
+    # azure:
+    #   client_id: clientid
+    #   tenant: tenant
+    #   secret: secret
+    #   subscription_id: subscriptionid
+    # alibaba:
+    #   access_key_id: accesskeyid
+    #   secret_access_key: secretaccesskey
+    # gcp:
+    #   credentials: {...}
+    #   pricing_data:
+    #     dataset_name: pricing_dataset
+    #     table_name: cloud_pricing_export
+    #   project_id: yourprojectid
+
+  # SMTP server used for outgoing email.
+  smtp:
+    server: ""
+    email: ""
+    login: ""
+    port: ""
+    password: ""
+    protocol: SSL
+
+  # OAuth sign-in (also consumed by the auth service and the UI).
+  oauth:
+    googleClientId: ""
+    googleClientSecret: ""
+    microsoftClientId: ""
+
+  # Slack app integration (slacker service).
+  slack:
+    signingSecret: ""
+    clientId: ""
+    clientSecret: ""
+
+  # Google Calendar integration for IT environment booking.
+  googleCalendarService:
+    enabled: false
+    accessKey: {}
+
+  optscaleServiceEmails:
+    recipient: ""
+    enabled: false
+  optscaleErrorEmails:
+    recipient: ""
+    enabled: false
+
+  domainsBlacklists:
+    registration: []
+    newEmployeeEmail: []
+    failedImportEmail: []
+  domainsWhitelists:
+    registration: []
+    newEmployeeEmail: []
+    failedImportEmail: []
+
+  # Skip sending emails whose template parameter matches a regex, e.g.
+  # skipEmailFilters:
+  #   anomaly_detection_alert:
+  #     texts.organization.name: ^aqa-(.*)$
+  skipEmailFilters: {}
+
+  passwordStrengthSettings:
+    minLength: ""
+    minLowercase: ""
+    minUppercase: ""
+    minDigits: ""
+    minSpecialChars: ""
+
+  # MariaDB databases created by the configurator.
+  databases:
+    - auth-db
+    - my-db
+    - tasks
+    - herald
+    - katara
+    - slacker
+    - jira-bus
+    - subspector
+
+  eventsQueue: events_queue
+
+  importReports:
+    messageExpirationSecs: 10800
+    notProcessedThresholdSecs: 10800
+    maxWorkers: 10
+    csvRewriteDays: 10
+
+  resourceDiscoverySettings:
+    discoverSize: 10000
+    timeout: ""
+    writingTimeout: 60
+    observeTimeout: 7200
+    debug: ""
+
+  demo:
+    multiplier: 2
+  demoOrgCleanup:
+    demoOrgLifetimeHrs: ""
+
+  kataraSchedulerTimeout: 3600
+  bumiSchedulerTimeout: 300
+  bumiWorker:
+    maxRetries: 5
+    waitTimeout: 7200
+    taskTimeout: 3600
+    runPeriod: 10800
+
+  biSettings:
+    exporterRunPeriod: 86400   # seconds (24h)
+    encryptionKey: 5t3X3PkQqF5edqW9_c8znow7k7GraZOpBLHhF1kFFvE=
+    taskWaitTimeout: 259200    # seconds (3d)
+
+  cleanmongodb:
+    chunkSize: 500
+    rowsLimit: 10000
+    archiveEnable: ""
+    fileMaxRows: 10000
+
+  # Extra exchange rates, e.g. {BRL: 5.1, INR: 83, EUR: 0.92}
+  exchangeRates: {}
+
+  fakeCadEnabled: "0"
+
+  stripe:
+    enabled: false
+    apiKey: ""
+    webhookSecret: ""
+
+  zohocrm: {}
+    # regapp:
+    #   email: ...
+    #   client_id: ...
+    #   client_secret: ...
+    #   refresh_token: ...
+    #   redirect_uri: ...
+
+  usersDatasetGenerator:
+    enable: false
+    bucket: ""
+    s3Path: ""
+    filename: ""
+    awsAccessKeyId: ""
+    awsSecretAccessKey: ""
+  failedImportsDatasetGenerator:
+    enable: false
+    bucket: ""
+    s3Path: ""
+    filename: ""
+    awsAccessKeyId: ""
+    awsSecretAccessKey: ""
+
+  # TLS certificates written into etcd (e.g. the public certificate agents
+  # should trust when the installation uses a self-signed certificate).
+  certificates: {}
+    # optscale: |
+    #   -----BEGIN CERTIFICATE-----
+    #   ...
+
+  opentelemetry:
+    enabled: false
+    exporter:
+      type: otlp
+      # Defaults to the in-release tempo service when empty.
+      connectionString: ""
+
+  # Free-form extra keys merged into the `etcd:` section of the generated
+  # configurator config (advanced use).
+  extra: {}
+
+# Configurator bootstrap job.
+configurator:
+  image: configurator
+  imageTag: ""
+  # When true the configurator does not overwrite existing etcd keys.
+  skipConfigUpdate: false
+  dropTasksDb: false
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 10
+  resources: {}
+  # Name of a pre-existing Secret with key `config` holding the full
+  # configurator YAML. When set, the chart does not render the
+  # optscale-config Secret and none of the `config.*` secret material is
+  # embedded in rendered manifests.
+  existingConfigSecret: ""
+  # Argo CD support: run the configurator as a Sync-phase hook (static name,
+  # recreated on every sync) instead of a revision-suffixed Job. Use this
+  # when the chart is deployed by Argo CD — plain Jobs are immutable and
+  # .Release.Revision never changes there.
+  argocdHook: false
+
+##############################################################################
+# Ingress
+##############################################################################
+ingress:
+  enabled: true
+  className: nginx
+  # Hostname for the UI/API. Empty means "match any host".
+  host: ""
+  # Extra annotations merged into the Ingress.
+  annotations: {}
+  forceSslRedirect: true
+  # Maximum upload size (cloud billing report uploads can be large).
+  proxyBodySize: 512m
+  proxyReadTimeout: "600"
+  proxySendTimeout: "600"
+  tls:
+    enabled: true
+    # Name of the TLS secret used by the Ingress.
+    secretName: defaultcert
+    # Inline PEM material — when both are set the chart creates the secret.
+    crt: ""
+    key: ""
+    # Let cert-manager issue the certificate instead.
+    certManager:
+      enabled: false
+      issuerType: issuer   # issuer | cluster-issuer
+      issuer: ""
+
+##############################################################################
+# Infrastructure components
+##############################################################################
+etcd:
+  name: etcd
+  image: etcd
+  imageTag: ""
+  serviceName: etcd-client
+  port: 2379
+  peerPort: 2380
+  hbInterval: 500        # increase on slow systems
+  electionTimeout: 5000  # hbInterval x10
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+mariadb:
+  name: mariadb
+  image: mariadb
+  imageTag: ""
+  port: 3306
+  rootPassword: my-password-01
+  # Use an existing secret with key `password` instead of rootPassword.
+  existingSecret: ""
+  maxConnections: 4096
+  # Periodic logical backups (mysqldump) to a PVC.
+  backup:
+    enabled: false
+    schedule: "0 12 * * *"
+    keep: 5
+    # PVC that receives the dumps (required when enabled).
+    existingClaim: ""
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+mongo:
+  # Set external.enabled to use an external MongoDB instead of the bundled one.
+  external:
+    enabled: false
+    # Full connection URL, e.g. mongodb://user:pass@host:27017
+    url: ""
+  name: mongo
+  image: mongo
+  imageTag: ""
+  servicePort: 80
+  containerPort: 27017
+  user: root
+  password: SecurePassword-01-02
+  # Replica set key file content (any long random string).
+  key: secureShardingKeyFFFDDa129
+  # Pre-existing Secret with keys `username`, `password`, `key.txt`;
+  # replaces the chart-rendered mongo-secret.
+  existingSecret: ""
+  cacheSizeGb: "1.0"
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+clickhouse:
+  external:
+    enabled: false
+  name: clickhouse
+  # Bundled ClickHouse uses the upstream image.
+  image: clickhouse/clickhouse-server:24.12
+  db: default
+  user: default
+  password: secure-password-1-clk
+  # Pre-existing Secret with key `password`; replaces clickhouse-secret.
+  existingSecret: ""
+  httpPort: 8123
+  tcpPort: 9000
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+rabbitmq:
+  name: rabbitmq
+  image: rabbitmq:4.1.4-management-alpine
+  port: 5672
+  managementPort: 15672
+  user: optscale
+  password: secure-password-here
+  erlangCookie: dWkhXehOApH1OHshvByfpfTf3Cd8wwkADei7mWd5JF
+  # Pre-existing Secret with keys `username`, `password`,
+  # `management-username`, `management-password`, `erlang-cookie` and
+  # `definitions.json`; replaces the chart-rendered rabbit-secret.
+  existingSecret: ""
+  # In-broker memory ceiling (vm_memory_high_watermark.absolute), MB.
+  memoryLimitMb: 512
+  quorum:
+    deliveryLimit: 100
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+redis:
+  name: redis
+  image: redis
+  imageTag: ""
+  servicePort: 80
+  containerPort: 6379
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+influxdb:
+  name: influxdb
+  image: influxdb
+  imageTag: ""
+  servicePort: 80
+  containerPort: 8086
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+minio:
+  name: minio
+  image: minio/minio:RELEASE.2020-03-19T21-49-00Z
+  servicePort: 80
+  containerPort: 9000
+  accessKey: optscale-minio
+  secretKey: secret_password
+  # Pre-existing Secret with keys `access`, `secret`; replaces minio-secret.
+  existingSecret: ""
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+##############################################################################
+# Metrics pipeline (Thanos + Tempo + Grafana)
+##############################################################################
+thanos:
+  enabled: true
+  image: thanosio/thanos:v0.39.1
+  bucket: thanos
+  # Pre-existing Secret with key `thanos_conf.yaml` (objstore config,
+  # including the MinIO keys); replaces the chart-rendered thanos-secret.
+  existingObjstoreSecret: ""
+  receive:
+    name: thanos-receive
+    replicaCount: 1
+    tsdbRetention: 4h
+    maxConcurrency: 20
+    httpPort: 10902
+    grpcPort: 10901
+    remoteWritePort: 19291
+    remoteWritePath: api/v1/receive
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+    resources:
+      limits:
+        cpu: 2
+        memory: 8Gi
+  storegateway:
+    name: thanos-storegateway
+    replicaCount: 1
+    ignoreDeletionMarksDelay: 3h   # half of compactor deleteDelay
+    httpPort: 10902
+    grpcPort: 10901
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+    resources: {}
+  query:
+    name: thanos-query
+    replicaCount: 1
+    httpPort: 10902
+    grpcPort: 10901
+    resources: {}
+  compactor:
+    name: thanos-compactor
+    schedule: "0 */12 * * *"
+    consistencyDelay: 4h
+    deleteDelay: 6h
+    retentionResolutionRaw: 30d
+    retentionResolution5m: 90d
+    retentionResolution1h: 120d
+    httpPort: 10902
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+    resources: {}
+  # Object storage browser for the thanos bucket (ops tool).
+  web:
+    enabled: false
+    name: thanos-web
+    refreshInterval: 10m
+    httpPort: 10902
+    resources: {}
+
+tempo:
+  enabled: false
+  name: tempo
+  image: grafana/tempo:2.10.0
+  queryPort: 3200
+  otlpGrpcPort: 4317
+  otlpHttpPort: 4318
+  persistence:
+    enabled: false
+    size: 10Gi
+    storageClass: ""
+  resources: {}
+
+grafana:
+  enabled: false
+  name: grafana
+  image: grafana
+  imageTag: ""
+  nginxImage: grafana_nginx
+  port: 3000
+  service:
+    type: ClusterIP
+    port: 80
+    nodePort: ""
+  user: userforgrafana
+  password: passwordforgrafana
+  resources: {}
+
+##############################################################################
+# Centralized logging (single-pod ELK + filebeat DaemonSet). Optional.
+##############################################################################
+elk:
+  enabled: false
+  name: elk
+  image: elk
+  imageTag: ""
+  esConnectRetry: "90"
+  lsHeapSize: 2g
+  esHeapSize: 1g
+  elasticPort: 9200
+  logstashTcpPort: 12201
+  logstashUdpPort: 12201
+  kibana:
+    service:
+      type: ClusterIP
+      port: 80
+      nodePort: ""
+  htpasswdUser: userforelk
+  htpasswdPass: passwordforelk
+  persistence:
+    enabled: true
+    size: 30Gi
+    storageClass: ""
+  resources: {}
+  filebeat:
+    enabled: true
+    image: filebeat
+    imageTag: ""
+    resources:
+      limits:
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 100Mi
+  # Prunes old log indices.
+  cleanelkdb:
+    enabled: false
+    image: cleanelkdb
+    schedule: "*/15 * * * *"
+    logMaxSizeMb: 5120
+
+##############################################################################
+# phpMyAdmin (debug tool — leave disabled in production)
+##############################################################################
+phpmyadmin:
+  enabled: false
+  name: myadmin
+  image: phpmyadmin/phpmyadmin:5.2.1
+  service:
+    type: ClusterIP
+    port: 80
+    nodePort: ""
+
+##############################################################################
+# Web UI
+##############################################################################
+ngui:
+  name: ngui
+  image: ngui
+  imageTag: ""
+  replicaCount: 1
+  servicePort: 80
+  containerPort: 4000
+  # Target for the UI server's fallback proxy (/auth, /restapi, /jira_bus).
+  # Only used for requests that bypass the Ingress; point it at your ingress
+  # controller's in-cluster service if you change controllers.
+  proxyUrl: http://ingress-nginx-controller.ingress-nginx
+  env:
+    buildMode: ""
+    googleMapApiKey: ""
+    ganalyticsId: ""
+    hotjarId: ""
+    onInitializeOrganizationSetupMode: ""
+    finopsInPracticePortalOverview: ""
+    billingIntegration: ""
+    appTheme: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+##############################################################################
+# API services — rendered by templates/apps/apis.yaml.
+# Each entry becomes a Deployment + ClusterIP Service.
+# `waitFor` entries reference well-known dependency names understood by the
+# wait-for helper: etcd, mariadb, mongo, clickhouse, rabbitmq, redis,
+# influxdb, minio, restapi, auth, keeper, herald, katara, insider, slacker,
+# metroculus, jirabus, subspector, thanosReceive, tempo.
+##############################################################################
+apis:
+  restapi:
+    name: restapi
+    image: rest_api
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8999
+    waitFor: [etcd, mariadb, rabbitmq]
+    extraEnv:
+      - name: REQUESTS_CA_BUNDLE
+        value: /etc/ssl/certs/ca-certificates.crt
+      - name: FAKE_CAD_ENABLED
+        value: "{{ .Values.config.fakeCadEnabled }}"
+  auth:
+    name: auth
+    image: auth
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8905
+    waitFor: [etcd, mariadb]
+  keeper:
+    name: keeper
+    image: keeper
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8973
+    waitFor: [mongo]
+  insider:
+    name: insider-api
+    image: insider_api
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8945
+    readinessProbe: false
+    waitFor: [etcd, mongo]
+  slacker:
+    name: slacker
+    image: slacker
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 80
+    strategy: Recreate
+    waitFor: [mariadb, auth, restapi]
+    extraEnv:
+      - name: SLACK_SIGNING_SECRET
+        value: "{{ .Values.config.slack.signingSecret }}"
+      - name: SLACK_CLIENT_ID
+        value: "{{ .Values.config.slack.clientId }}"
+      - name: SLACK_CLIENT_SECRET
+        value: "{{ .Values.config.slack.clientSecret }}"
+  jirabus:
+    name: jira-bus
+    image: jira_bus
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8977
+    strategy: Recreate
+    waitFor: [mariadb, auth, restapi]
+  jiraui:
+    name: jira-ui
+    image: jira_ui
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 4000
+    strategy: Recreate
+    etcdEnv: false
+    waitFor: [jirabus]
+    extraEnv:
+      - name: UI_BUILD_PATH
+        value: /usr/src/app/ui
+  metroculus:
+    name: metroculusapi
+    image: metroculus_api
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8969
+    readinessProbe: false
+    waitFor: [etcd, clickhouse]
+  diproxy:
+    name: diproxy
+    image: diproxy
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8935
+    waitFor: [restapi, thanosReceive]
+  errorPages:
+    name: error-pages
+    image: error_pages
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8080
+    etcdEnv: false
+    readinessProbe: false
+    waitFor: []
+  # subspector is only deployed when config.stripe.enabled is true.
+  subspector:
+    name: subspector
+    image: subspector
+    replicaCount: 1
+    servicePort: 80
+    containerPort: 8800
+    waitFor: [etcd, mariadb, rabbitmq]
+
+##############################################################################
+# Herald (notifications) and Katara (report emails) — multi-role services.
+##############################################################################
+herald:
+  name: herald
+  image: herald
+  servicePort: 80
+  containerPort: 8906
+  api:
+    replicaCount: 1
+  engine:
+    replicaCount: 2
+    # Custom email templates / template filters. By default an emptyDir is
+    # mounted; set existingClaim to provide your own templates via a PVC.
+    customTemplates:
+      existingClaim: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+katara:
+  name: katara
+  serviceImage: katara_service
+  workerImage: katara_worker
+  servicePort: 80
+  containerPort: 8935
+  api:
+    replicaCount: 1
+  scheduler:
+    replicaCount: 1
+  worker:
+    replicaCount: 1
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+##############################################################################
+# Background workers — rendered by templates/apps/workers.yaml.
+# Each entry becomes a Deployment (no Service).
+##############################################################################
+workers:
+  diworker:
+    name: diworker
+    image: diworker
+    replicaCount: 1
+    waitFor: [rabbitmq, mongo, clickhouse, restapi]
+    extraEnv:
+      - name: FAKE_CAD_ENABLED
+        value: "{{ .Values.config.fakeCadEnabled }}"
+  bumischeduler:
+    name: bumischeduler
+    image: bumischeduler
+    replicaCount: 1
+    waitFor: [etcd, rabbitmq]
+  bumiworker:
+    name: bumiworker
+    image: bumiworker
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi]
+    extraEnv:
+      - name: FAKE_CAD_ENABLED
+        value: "{{ .Values.config.fakeCadEnabled }}"
+  insiderWorker:
+    name: insider-worker
+    image: insider_worker
+    replicaCount: 1
+    waitFor: [rabbitmq, etcd, mongo]
+  metroculusWorker:
+    name: metroculusworker
+    image: metroculus_worker
+    replicaCount: 1
+    waitFor: [rabbitmq, etcd, mongo, restapi, clickhouse]
+  trapperWorker:
+    name: trapper-worker
+    image: trapper_worker
+    replicaCount: 1
+    waitFor: [rabbitmq, etcd, mongo, restapi, clickhouse]
+  rispWorker:
+    name: risp-worker
+    image: risp_worker
+    replicaCount: 1
+    waitFor: [rabbitmq, etcd, mongo, restapi, clickhouse]
+  geminiWorker:
+    name: gemini-worker
+    image: gemini_worker
+    replicaCount: 1
+    waitFor: [rabbitmq, etcd, restapi]
+    cacheVolume:
+      mountPath: /usr/src/app/gemini_worker/cache
+  geminiDataWorker:
+    name: gemini-data-worker
+    image: gemini_data_worker
+    replicaCount: 1
+    waitFor: [rabbitmq, etcd, restapi]
+    cacheVolume:
+      mountPath: /usr/src/app/gemini_data_worker/cache
+  biExporter:
+    name: bi-exporter
+    image: bi_exporter
+    replicaCount: 1
+    waitFor: [rabbitmq, mongo, restapi, clickhouse]
+    cacheVolume:
+      mountPath: /usr/src/app/bi_exporter/bi
+  webhookExecutor:
+    name: webhook-executor
+    image: webhook_executor
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi, mongo]
+  slackerExecutor:
+    name: slacker-executor
+    image: slacker_executor
+    replicaCount: 1
+    waitFor: [rabbitmq, slacker]
+  heraldExecutor:
+    name: herald-executor
+    image: herald_executor
+    replicaCount: 1
+    waitFor: [rabbitmq]
+  keeperExecutor:
+    name: keeper-executor
+    image: keeper_executor
+    replicaCount: 1
+    waitFor: [rabbitmq]
+  # Worker halves of the scheduler/worker pairs (schedulers are CronJobs).
+  resourceDiscovery:
+    name: resource-discovery-worker
+    image: resource_discovery
+    replicaCount: 2
+    waitFor: [rabbitmq, restapi]
+    resources:
+      limits:
+        memory: 1Gi
+    extraEnv:
+      - name: FAKE_CAD_ENABLED
+        value: "{{ .Values.config.fakeCadEnabled }}"
+  resourceObserver:
+    name: resource-observer-worker
+    image: resource_observer
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi]
+  resourceViolations:
+    name: resource-violations-worker
+    image: resource_violations
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi]
+  organizationViolations:
+    name: organization-violations-worker
+    image: organization_violations
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi]
+  bookingObserver:
+    name: booking-observer-worker
+    image: booking_observer
+    replicaCount: 2
+    waitFor: [rabbitmq, restapi, mongo]
+  calendarObserver:
+    name: calendar-observer-worker
+    image: calendar_observer
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi]
+  powerSchedule:
+    name: power-schedule-worker
+    image: power_schedule
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi, mongo]
+  liveDemoGenerator:
+    name: live-demo-generator-worker
+    image: live_demo_generator
+    replicaCount: 1
+    waitFor: [rabbitmq, restapi, mongo]
+  # Stripe-gated (deployed only when config.stripe.enabled).
+  bailiff:
+    name: bailiff-worker
+    image: bailiff
+    replicaCount: 1
+    stripeOnly: true
+    waitFor: [rabbitmq, subspector, restapi]
+
+##############################################################################
+# Scheduled jobs — rendered by templates/apps/cronjobs.yaml.
+# Each entry becomes a CronJob (concurrencyPolicy Forbid, restartPolicy Never).
+# `project` shorthand generates the standard scheduler command
+#   uv --project docker_images/<project> run python3 docker_images/<project>/<script>
+##############################################################################
+cronjobs:
+  resourceDiscoveryScheduler:
+    name: resource-discovery-scheduler
+    image: resource_discovery
+    schedule: "*/5 * * * *"
+    project: resource_discovery
+    waitFor: [restapi]
+  resourceObserverScheduler:
+    name: resource-observer-scheduler
+    image: resource_observer
+    schedule: "*/5 * * * *"
+    project: resource_observer
+    waitFor: [restapi]
+  resourceViolationsScheduler:
+    name: resource-violations-scheduler
+    image: resource_violations
+    schedule: "*/5 * * * *"
+    project: resource_violations
+    waitFor: [restapi]
+  organizationViolationsScheduler:
+    name: organization-violations-scheduler
+    image: organization_violations
+    schedule: "*/5 * * * *"
+    project: organization_violations
+    waitFor: [rabbitmq, restapi]
+  bookingObserverScheduler:
+    name: booking-observer-scheduler
+    image: booking_observer
+    schedule: "*/1 * * * *"
+    project: booking_observer
+    waitFor: [rabbitmq, restapi]
+  calendarObserverScheduler:
+    name: calendar-observer-scheduler
+    image: calendar_observer
+    schedule: "0 * * * *"
+    project: calendar_observer
+    waitFor: [restapi]
+  powerScheduleScheduler:
+    name: power-schedule-scheduler
+    image: power_schedule
+    schedule: "*/5 * * * *"
+    project: power_schedule
+    waitFor: [rabbitmq, restapi]
+  liveDemoGeneratorScheduler:
+    name: live-demo-generator-scheduler
+    image: live_demo_generator
+    schedule: "0 * * * *"
+    project: live_demo_generator
+    waitFor: [rabbitmq, mongo]
+  insiderScheduler:
+    name: insider-scheduler
+    image: insider_scheduler
+    schedule: "0 0 * * *"
+    waitFor: [rabbitmq, etcd, mongo]
+  metroculusScheduler:
+    name: metroculusscheduler
+    image: metroculus_scheduler
+    schedule: "*/30 * * * *"
+    waitFor: [rabbitmq, etcd, restapi]
+  trapperScheduler:
+    name: trapper-scheduler
+    image: trapper_scheduler
+    schedule: "45 */1 * * *"
+    waitFor: [rabbitmq, etcd, restapi]
+  rispScheduler:
+    name: risp-scheduler
+    image: risp_scheduler
+    schedule: "45 */1 * * *"
+    waitFor: [rabbitmq, etcd, restapi]
+  geminiScheduler:
+    name: gemini-scheduler
+    image: gemini_scheduler
+    schedule: "*/5 * * * *"
+    waitFor: [rabbitmq, etcd, restapi]
+  biScheduler:
+    name: bi-scheduler
+    image: bi_scheduler
+    schedule: "*/5 * * * *"
+    project: bi_scheduler
+    waitFor: [rabbitmq, restapi]
+  layoutCleaner:
+    name: layout-cleaner
+    image: layout_cleaner
+    schedule: "0 3 * * *"
+    project: layout_cleaner
+    script: worker.py
+    waitFor: [restapi]
+  demoOrgCleanup:
+    name: demoorgcleanup
+    image: demo_org_cleanup
+    schedule: "0 0 * * *"
+    waitFor: [restapi]
+  cleanmongodb:
+    name: cleanmongodb
+    image: cleanmongodb
+    schedule: "*/3 * * * *"
+    waitFor: [mariadb, mongo]
+    archiveVolume:
+      mountPath: /src/archive/
+  usersDatasetGenerator:
+    name: users-dataset-generator
+    image: users_dataset_generator
+    enabled: false
+    schedule: "0 0 * * *"
+    waitFor: [mariadb, clickhouse, mongo]
+  failedImportsDatasetGenerator:
+    name: failed-imports-dataset-generator
+    image: failed_imports_dataset_generator
+    enabled: false
+    schedule: "0 0 * * *"
+    waitFor: [mariadb]
+  # Stripe-gated (created only when config.stripe.enabled).
+  subsyncer:
+    name: subsyncer
+    image: subsyncer
+    schedule: "0 * * * *"
+    stripeOnly: true
+    waitFor: [subspector]
+
+# Triggers billing report imports via the REST API on several cadences.
+reportImport:
+  image: curlimages/curl:8.14.1
+  startingDeadlineSeconds: 100
+  schedules:
+    "0": "*/15 * * * *"
+    "1": "0 * * * *"
+    "6": "0 */6 * * *"
+    "24": "0 0 * * *"
+
+# Removes stale metrics from InfluxDB.
+cleaninfluxdb:
+  enabled: true
+  name: cleaninfluxdb
+  image: cleaninfluxdb
+  schedule: "@weekly"
+  daysToStore: 90
+
+# Common CronJob settings.
+cronDefaults:
+  startingDeadlineSeconds: 100
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1

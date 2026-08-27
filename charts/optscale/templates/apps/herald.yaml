@@ -1,0 +1,118 @@
+{{- $cfg := .Values.herald }}
+{{- $image := include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) }}
+{{- $apiName := printf "%sapi" $cfg.name }}
+{{- $engineName := printf "%sengine" $cfg.name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.servicePort }}
+      targetPort: {{ $cfg.containerPort }}
+      protocol: TCP
+      name: {{ $cfg.name }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $apiName) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $apiName }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $apiName) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $apiName) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $apiName) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "rabbitmq")) | nindent 8 }}
+      containers:
+        - name: {{ $apiName }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $cfg.containerPort }}
+          env:
+            {{- include "optscale.etcdEnv" . | nindent 12 }}
+            - name: HERALD_SERVICE
+              value: api
+          readinessProbe:
+            tcpSocket:
+              port: {{ $cfg.containerPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $engineName }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $engineName) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.engine.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $engineName) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $engineName) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "rabbitmq")) | nindent 8 }}
+      containers:
+        - name: {{ $engineName }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            {{- include "optscale.etcdEnv" . | nindent 12 }}
+            - name: HERALD_SERVICE
+              value: engine
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: custom-templates
+              mountPath: /usr/src/app/herald/modules/email_generator/custom_templates
+              {{- if $cfg.engine.customTemplates.existingClaim }}
+              subPath: email_templates
+              {{- end }}
+            - name: custom-filters
+              mountPath: /usr/src/app/herald/modules/email_generator/customer_filters
+              {{- if $cfg.engine.customTemplates.existingClaim }}
+              subPath: template_filters
+              {{- end }}
+      volumes:
+        {{- if $cfg.engine.customTemplates.existingClaim }}
+        - name: custom-templates
+          persistentVolumeClaim:
+            claimName: {{ $cfg.engine.customTemplates.existingClaim }}
+        - name: custom-filters
+          persistentVolumeClaim:
+            claimName: {{ $cfg.engine.customTemplates.existingClaim }}
+        {{- else }}
+        - name: custom-templates
+          emptyDir: {}
+        - name: custom-filters
+          emptyDir: {}
+        {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}

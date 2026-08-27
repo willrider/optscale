@@ -1,0 +1,100 @@
+{{- $cfg := .Values.minio }}
+{{- if not $cfg.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-secret
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+type: Opaque
+data:
+  access: {{ $cfg.accessKey | b64enc | quote }}
+  secret: {{ $cfg.secretKey | b64enc | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.servicePort }}
+      targetPort: s3
+      protocol: TCP
+      name: {{ $cfg.name }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $cfg.name }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $cfg.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["server", "/data"]
+          env:
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "optscale.minio.secretName" . }}
+                  key: access
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "optscale.minio.secretName" . }}
+                  key: secret
+          ports:
+            - name: s3
+              containerPort: {{ $cfg.containerPort }}
+          readinessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- if not $cfg.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+  {{- if $cfg.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($cfg.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cfg.persistence.size }}
+  {{- end }}

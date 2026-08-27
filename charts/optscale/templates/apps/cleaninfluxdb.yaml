@@ -1,0 +1,37 @@
+{{- if .Values.cleaninfluxdb.enabled }}
+{{- $cfg := .Values.cleaninfluxdb }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  schedule: {{ $cfg.schedule | quote }}
+  {{- include "optscale.cronPolicy" . | nindent 2 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- include "optscale.imagePullSecrets" . | nindent 10 }}
+          initContainers:
+            {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "influxdb")) | nindent 12 }}
+          containers:
+            - name: {{ $cfg.name }}
+              image: {{ include "optscale.image" (dict "root" . "repo" $cfg.image) | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              env:
+                - name: HX_INFLUXDB_HOST
+                  value: {{ .Values.influxdb.name | quote }}
+                - name: HX_INFLUXDB_PORT
+                  value: {{ .Values.influxdb.servicePort | quote }}
+                - name: HX_DAYS_TO_STORE
+                  value: {{ $cfg.daysToStore | quote }}
+          {{- include "optscale.podScheduling" (dict "root" .) | nindent 10 }}
+{{- end }}

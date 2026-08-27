@@ -1,0 +1,492 @@
+{{- define "optscale.thanos.objstore" -}}
+type: S3
+config:
+  bucket: {{ .Values.thanos.bucket | quote }}
+  endpoint: "{{ .Values.minio.name }}:{{ .Values.minio.servicePort }}"
+  access_key: {{ .Values.minio.accessKey | quote }}
+  secret_key: {{ .Values.minio.secretKey | quote }}
+  insecure: true
+prefix: "data"
+{{- end -}}
+
+{{- define "optscale.thanos.probes" -}}
+livenessProbe:
+  httpGet:
+    path: /-/healthy
+    port: http
+  initialDelaySeconds: 30
+  timeoutSeconds: 30
+  periodSeconds: 10
+  failureThreshold: 6
+readinessProbe:
+  httpGet:
+    path: /-/ready
+    port: http
+  initialDelaySeconds: 30
+  timeoutSeconds: 30
+  periodSeconds: 10
+  failureThreshold: 6
+{{- end -}}
+
+{{- if .Values.thanos.enabled }}
+{{- $t := .Values.thanos }}
+{{- if not $t.existingObjstoreSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thanos-secret
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "thanos") | nindent 4 }}
+type: Opaque
+stringData:
+  thanos_conf.yaml: |
+    {{- include "optscale.thanos.objstore" . | nindent 4 }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $t.receive.name }}-limits-config
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.receive.name) | nindent 4 }}
+data:
+  thanos_limits.yaml: |
+    write:
+      global:
+        max_concurrency: {{ $t.receive.maxConcurrency }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $t.receive.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.receive.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $t.receive.httpPort }}
+      targetPort: http
+    - name: grpc
+      port: {{ $t.receive.grpcPort }}
+      targetPort: grpc
+    - name: remote
+      port: {{ $t.receive.remoteWritePort }}
+      targetPort: remote
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $t.receive.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $t.receive.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.receive.name) | nindent 4 }}
+spec:
+  replicas: {{ $t.receive.replicaCount }}
+  serviceName: {{ $t.receive.name }}
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $t.receive.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $t.receive.name) | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 0
+        runAsGroup: 0
+        runAsUser: 0
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "minio")) | nindent 8 }}
+      containers:
+        - name: {{ $t.receive.name }}
+          image: {{ $t.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - receive
+            - --grpc-address=0.0.0.0:{{ $t.receive.grpcPort }}
+            - --http-address=0.0.0.0:{{ $t.receive.httpPort }}
+            - --remote-write.address=0.0.0.0:{{ $t.receive.remoteWritePort }}
+            - --objstore.config-file=/var/thanos/config/thanos_conf.yaml
+            - --tsdb.path=/var/thanos/receive
+            - --tsdb.retention={{ $t.receive.tsdbRetention }}
+            - --tsdb.wal-compression
+            - --tsdb.no-lockfile
+            - --tsdb.out-of-order.time-window=1h
+            - --label=receive="$(NAME)"
+            - --receive.tenant-header=Cloud-Account-Id
+            - --receive-forward-timeout=2m
+            - --log.level=info
+            - --receive.limits-config-file=/var/thanos/limits_config/thanos_limits.yaml
+            - --tsdb.memory-snapshot-on-shutdown
+          env:
+            - name: NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: http
+              containerPort: {{ $t.receive.httpPort }}
+            - name: grpc
+              containerPort: {{ $t.receive.grpcPort }}
+            - name: remote
+              containerPort: {{ $t.receive.remoteWritePort }}
+          {{- include "optscale.thanos.probes" . | nindent 10 }}
+          {{- with $t.receive.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/thanos/receive
+            - name: config
+              mountPath: /var/thanos/config
+              readOnly: true
+            - name: limits-config
+              mountPath: /var/thanos/limits_config
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "optscale.thanos.secretName" . }}
+        - name: limits-config
+          configMap:
+            name: {{ $t.receive.name }}-limits-config
+        {{- if not $t.receive.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+  {{- if $t.receive.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($t.receive.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $t.receive.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $t.storegateway.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.storegateway.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $t.storegateway.httpPort }}
+      targetPort: http
+    - name: grpc
+      port: {{ $t.storegateway.grpcPort }}
+      targetPort: grpc
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $t.storegateway.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $t.storegateway.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.storegateway.name) | nindent 4 }}
+spec:
+  replicas: {{ $t.storegateway.replicaCount }}
+  serviceName: {{ $t.storegateway.name }}
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $t.storegateway.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $t.storegateway.name) | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 0
+        runAsGroup: 0
+        runAsUser: 0
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "minio")) | nindent 8 }}
+      containers:
+        - name: {{ $t.storegateway.name }}
+          image: {{ $t.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - store
+            - --grpc-address=0.0.0.0:{{ $t.storegateway.grpcPort }}
+            - --http-address=0.0.0.0:{{ $t.storegateway.httpPort }}
+            - --ignore-deletion-marks-delay={{ $t.storegateway.ignoreDeletionMarksDelay }}
+            - --objstore.config-file=/var/thanos/config/thanos_conf.yaml
+            - --data-dir=/var/thanos/data
+          ports:
+            - name: http
+              containerPort: {{ $t.storegateway.httpPort }}
+            - name: grpc
+              containerPort: {{ $t.storegateway.grpcPort }}
+          {{- include "optscale.thanos.probes" . | nindent 10 }}
+          {{- with $t.storegateway.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/thanos/data
+            - name: config
+              mountPath: /var/thanos/config
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "optscale.thanos.secretName" . }}
+        {{- if not $t.storegateway.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+  {{- if $t.storegateway.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($t.storegateway.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $t.storegateway.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $t.query.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.query.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $t.query.httpPort }}
+      targetPort: http
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $t.query.name) | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $t.query.name }}-grpc
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.query.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: {{ $t.query.grpcPort }}
+      targetPort: grpc
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $t.query.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $t.query.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.query.name) | nindent 4 }}
+spec:
+  replicas: {{ $t.query.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $t.query.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $t.query.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "thanosReceive")) | nindent 8 }}
+        {{- include "optscale.waitTcp" (dict "root" . "name" "thanos-storegateway" "host" $t.storegateway.name "port" $t.storegateway.httpPort) | nindent 8 }}
+      containers:
+        - name: {{ $t.query.name }}
+          image: {{ $t.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - query
+            - --grpc-address=0.0.0.0:{{ $t.query.grpcPort }}
+            - --http-address=0.0.0.0:{{ $t.query.httpPort }}
+            - --endpoint=dnssrv+_grpc._tcp.{{ $t.storegateway.name }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}
+            - --endpoint=dnssrv+_grpc._tcp.{{ $t.receive.name }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}
+          ports:
+            - name: http
+              containerPort: {{ $t.query.httpPort }}
+            - name: grpc
+              containerPort: {{ $t.query.grpcPort }}
+          {{- include "optscale.thanos.probes" . | nindent 10 }}
+          {{- with $t.query.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+---
+{{- if $t.compactor.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $t.compactor.name }}-data
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.compactor.name) | nindent 4 }}
+  annotations:
+    # Stays Pending until the compactor CronJob first runs (up to 12h with
+    # WaitForFirstConsumer storage) — keep Argo CD from reporting the app
+    # as Progressing the whole time.
+    argocd.argoproj.io/ignore-healthcheck: "true"
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with ($t.compactor.persistence.storageClass | default .Values.global.storageClass) }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $t.compactor.persistence.size }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $t.compactor.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.compactor.name) | nindent 4 }}
+spec:
+  schedule: {{ $t.compactor.schedule | quote }}
+  {{- include "optscale.cronPolicy" . | nindent 2 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "optscale.selectorLabels" (dict "root" . "name" $t.compactor.name) | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            fsGroup: 0
+            runAsGroup: 0
+            runAsUser: 0
+          {{- include "optscale.imagePullSecrets" . | nindent 10 }}
+          initContainers:
+            {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "minio")) | nindent 12 }}
+          containers:
+            - name: {{ $t.compactor.name }}
+              image: {{ $t.image | quote }}
+              imagePullPolicy: IfNotPresent
+              args:
+                - compact
+                - --log.level=info
+                - --http-address=0.0.0.0:{{ $t.compactor.httpPort }}
+                - --consistency-delay={{ $t.compactor.consistencyDelay }}
+                - --objstore.config-file=/var/thanos/config/thanos_conf.yaml
+                - --data-dir=/var/thanos/data
+                - --delete-delay={{ $t.compactor.deleteDelay }}
+                - --retention.resolution-raw={{ $t.compactor.retentionResolutionRaw }}
+                - --retention.resolution-5m={{ $t.compactor.retentionResolution5m }}
+                - --retention.resolution-1h={{ $t.compactor.retentionResolution1h }}
+                - --compact.enable-vertical-compaction
+              {{- with $t.compactor.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: config
+                  mountPath: /var/thanos/config
+                  readOnly: true
+                - name: data
+                  mountPath: /var/thanos/data
+          volumes:
+            - name: config
+              secret:
+                secretName: {{ include "optscale.thanos.secretName" . }}
+            - name: data
+              {{- if $t.compactor.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ $t.compactor.name }}-data
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+          {{- include "optscale.podScheduling" (dict "root" .) | nindent 10 }}
+{{- if $t.web.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $t.web.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.web.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $t.web.httpPort }}
+      targetPort: http
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $t.web.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $t.web.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $t.web.name) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $t.web.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $t.web.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "minio")) | nindent 8 }}
+      containers:
+        - name: {{ $t.web.name }}
+          image: {{ $t.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - tools
+            - bucket
+            - web
+            - --http-address=0.0.0.0:{{ $t.web.httpPort }}
+            - --objstore.config-file=/var/thanos/config/thanos_conf.yaml
+            - --refresh={{ $t.web.refreshInterval }}
+          ports:
+            - name: http
+              containerPort: {{ $t.web.httpPort }}
+          {{- include "optscale.thanos.probes" . | nindent 10 }}
+          {{- with $t.web.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /var/thanos/config
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "optscale.thanos.secretName" . }}
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+{{- end }}
+{{- end }}

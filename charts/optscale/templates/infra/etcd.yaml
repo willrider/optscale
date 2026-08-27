@@ -1,0 +1,93 @@
+{{- $cfg := .Values.etcd }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.serviceName }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.port }}
+      targetPort: client
+      protocol: TCP
+      name: client
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  # The bundled etcd runs as a single member; OptScale stores only
+  # configuration in it and repopulates it via the configurator.
+  replicas: 1
+  serviceName: {{ $cfg.serviceName }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - "/usr/local/bin/etcd"
+            - "-listen-client-urls"
+            - "http://0.0.0.0:{{ $cfg.port }}"
+            - "-advertise-client-urls"
+            - "http://0.0.0.0:{{ $cfg.port }}"
+          ports:
+            - name: client
+              containerPort: {{ $cfg.port }}
+            - name: peer
+              containerPort: {{ $cfg.peerPort }}
+          env:
+            - name: ETCD_HEARTBEAT_INTERVAL
+              value: {{ $cfg.hbInterval | quote }}
+            - name: ETCD_ELECTION_TIMEOUT
+              value: {{ $cfg.electionTimeout | quote }}
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - etcdctl --endpoints=http://127.0.0.1:{{ $cfg.port }} cluster-health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 20
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /default.etcd
+      {{- if not $cfg.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+  {{- if $cfg.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($cfg.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cfg.persistence.size }}
+  {{- end }}

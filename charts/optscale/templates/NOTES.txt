@@ -1,0 +1,39 @@
+OptScale {{ include "optscale.tag" . }} has been deployed to namespace {{ .Release.Namespace }}.
+
+A configurator Job is now bootstrapping the databases and seeding etcd.
+Application pods wait for it to finish, so the first start typically takes
+5-15 minutes (image pulls + bootstrap). Follow progress with:
+
+  kubectl -n {{ .Release.Namespace }} logs -f job/{{ if .Values.configurator.argocdHook }}configurator{{ else }}configurator-r{{ .Release.Revision }}{{ end }}
+  kubectl -n {{ .Release.Namespace }} get pods
+
+{{- if .Values.ingress.enabled }}
+
+The UI is exposed through the Ingress{{ with .Values.ingress.host }} at:
+
+  https://{{ . }}/
+{{- else }}. Find the address with:
+
+  kubectl -n {{ .Release.Namespace }} get ingress optscale
+{{- end }}
+{{- else }}
+
+Ingress is disabled. To reach the UI locally:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Values.ngui.name }} 8080:{{ .Values.ngui.servicePort }}
+{{- end }}
+
+Register the first user through the web UI — the first registered user
+becomes the organization owner.
+
+{{- if eq .Values.config.secrets.cluster "change-me-in-production" }}
+
+WARNING: config.secrets.cluster still has its default value. Set a unique
+secret before using this installation in production.
+{{- end }}
+{{- if not .Values.config.serviceCredentials }}
+
+NOTE: config.serviceCredentials is empty. OptScale uses these cloud
+credentials to fetch pricing data — recommendations will not work until
+they are provided (see the chart README).
+{{- end }}

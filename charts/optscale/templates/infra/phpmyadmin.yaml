@@ -1,0 +1,53 @@
+{{- if .Values.phpmyadmin.enabled }}
+{{- $cfg := .Values.phpmyadmin }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: {{ $cfg.service.type }}
+  ports:
+    - port: {{ $cfg.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: {{ $cfg.name }}
+      {{- if and (eq $cfg.service.type "NodePort") $cfg.service.nodePort }}
+      nodePort: {{ $cfg.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "mariadb")) | nindent 8 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $cfg.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PMA_HOST
+              value: {{ .Values.mariadb.name | quote }}
+          ports:
+            - name: http
+              containerPort: 80
+      {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
+{{- end }}

@@ -1,0 +1,85 @@
+{{- $cfg := .Values.ngui }}
+{{- $v := .Values }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.servicePort }}
+      targetPort: {{ $cfg.containerPort }}
+      protocol: TCP
+      name: {{ $cfg.name }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "optscale.waitFor" (dict "root" . "waitFor" (list "auth" "jirabus" "restapi" "keeper" "slacker" "redis")) | nindent 8 }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: BUILD_MODE
+              value: {{ $cfg.env.buildMode | quote }}
+            - name: UI_BUILD_PATH
+              value: /usr/src/app/ui
+            - name: PROXY_URL
+              value: {{ $cfg.proxyUrl | quote }}
+            - name: RESTAPI_ENDPOINT
+              value: "http://{{ $v.apis.restapi.name }}:{{ $v.apis.restapi.servicePort }}"
+            - name: AUTH_ENDPOINT
+              value: "http://{{ $v.apis.auth.name }}:{{ $v.apis.auth.servicePort }}"
+            - name: KEEPER_ENDPOINT
+              value: "http://{{ $v.apis.keeper.name }}:{{ $v.apis.keeper.servicePort }}"
+            - name: SLACKER_ENDPOINT
+              value: "http://{{ $v.apis.slacker.name }}:{{ $v.apis.slacker.servicePort }}"
+            - name: VITE_GOOGLE_OAUTH_CLIENT_ID
+              value: {{ $v.config.oauth.googleClientId | quote }}
+            - name: VITE_MICROSOFT_OAUTH_CLIENT_ID
+              value: {{ $v.config.oauth.microsoftClientId | quote }}
+            - name: VITE_GOOGLE_MAP_API_KEY
+              value: {{ $cfg.env.googleMapApiKey | quote }}
+            - name: VITE_GANALYTICS_ID
+              value: {{ $cfg.env.ganalyticsId | quote }}
+            - name: VITE_HOTJAR_ID
+              value: {{ $cfg.env.hotjarId | quote }}
+            - name: VITE_ON_INITIALIZE_ORGANIZATION_SETUP_MODE
+              value: {{ $cfg.env.onInitializeOrganizationSetupMode | quote }}
+            - name: VITE_FINOPS_IN_PRACTICE_PORTAL_OVERVIEW
+              value: {{ $cfg.env.finopsInPracticePortalOverview | quote }}
+            - name: VITE_BILLING_INTEGRATION
+              value: {{ $cfg.env.billingIntegration | quote }}
+            - name: VITE_APP_THEME
+              value: {{ $cfg.env.appTheme | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $cfg.containerPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}

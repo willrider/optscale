@@ -1,0 +1,106 @@
+{{- /*
+Renders a Deployment + ClusterIP Service for every entry in .Values.apis.
+Component-specific quirks (OAuth env for auth, migrations init container for
+subspector, ...) are handled inline below.
+*/}}
+{{- $root := . }}
+{{- range $key, $cfg := .Values.apis }}
+{{- $stripeGated := eq $key "subspector" }}
+{{- $thanosGated := eq $key "diproxy" }}
+{{- $enabled := eq (include "optscale.flag" (dict "map" $cfg "key" "enabled" "default" true)) "true" }}
+{{- $etcdEnv := eq (include "optscale.flag" (dict "map" $cfg "key" "etcdEnv" "default" true)) "true" }}
+{{- $probe := eq (include "optscale.flag" (dict "map" $cfg "key" "readinessProbe" "default" true)) "true" }}
+{{- if and $enabled
+           (or (not $stripeGated) $root.Values.config.stripe.enabled)
+           (or (not $thanosGated) $root.Values.thanos.enabled) }}
+{{- $image := include "optscale.image" (dict "root" $root "repo" $cfg.image "tag" $cfg.imageTag) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" $root "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $cfg.servicePort }}
+      targetPort: {{ $cfg.containerPort }}
+      protocol: TCP
+      name: {{ $cfg.name }}
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" $root "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" $root "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.replicaCount | default 1 }}
+  {{- if eq ($cfg.strategy | default "") "Recreate" }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" $root "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" $root "name" $cfg.name) | nindent 8 }}
+    spec:
+      {{- include "optscale.imagePullSecrets" $root | nindent 6 }}
+      {{- $waits := include "optscale.waitFor" (dict "root" $root "waitFor" $cfg.waitFor) }}
+      {{- if or (trim $waits) (eq $key "subspector") }}
+      initContainers:
+        {{- $waits | nindent 8 }}
+        {{- if eq $key "subspector" }}
+        - name: migrations
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          command: ["uv", "run", "--project", "subspector", "python", "subspector/migrate.py"]
+          env:
+            {{- include "optscale.etcdEnv" $root | nindent 12 }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $cfg.containerPort }}
+          {{- if or $etcdEnv (eq $key "auth") ($cfg.extraEnv) }}
+          env:
+            {{- if $etcdEnv }}
+            {{- include "optscale.etcdEnv" $root | nindent 12 }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ $cfg.name | quote }}
+            - name: OTEL_SERVICE_VERSION
+              value: {{ $cfg.imageTag | default (include "optscale.tag" $root) | quote }}
+            {{- end }}
+            {{- if eq $key "auth" }}
+            - name: GOOGLE_OAUTH_CLIENT_ID
+              value: {{ $root.Values.config.oauth.googleClientId | quote }}
+            - name: GOOGLE_OAUTH_CLIENT_SECRET
+              value: {{ $root.Values.config.oauth.googleClientSecret | quote }}
+            - name: MICROSOFT_OAUTH_CLIENT_ID
+              value: {{ $root.Values.config.oauth.microsoftClientId | quote }}
+            {{- end }}
+            {{- include "optscale.extraEnv" (dict "root" $root "env" $cfg.extraEnv) | nindent 12 }}
+          {{- end }}
+          {{- if $probe }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $cfg.containerPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- end }}
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" $root "comp" $cfg) | nindent 6 }}
+{{- end }}
+{{- end }}

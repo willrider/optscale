@@ -1,0 +1,42 @@
+{{- $tag := include "optscale.tag" . -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: optscale-version
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "optscale-version") | nindent 4 }}
+data:
+  component_versions.yaml: |
+    optscale: {{ $tag }}
+    images:
+      {{- range $key, $comp := .Values.apis }}
+      {{ $comp.image }}: {{ $comp.imageTag | default $tag }}
+      {{- end }}
+      {{- range $key, $comp := .Values.workers }}
+      {{ $comp.image }}: {{ $comp.imageTag | default $tag }}
+      {{- end }}
+      {{- range $key, $comp := .Values.cronjobs }}
+      {{ $comp.image }}: {{ $comp.imageTag | default $tag }}
+      {{- end }}
+      configurator: {{ .Values.configurator.imageTag | default $tag }}
+      etcd: {{ .Values.etcd.imageTag | default $tag }}
+      mariadb: {{ .Values.mariadb.imageTag | default $tag }}
+      {{- if not .Values.mongo.external.enabled }}
+      mongo: {{ .Values.mongo.imageTag | default $tag }}
+      {{- end }}
+      redis: {{ .Values.redis.imageTag | default $tag }}
+      influxdb: {{ .Values.influxdb.imageTag | default $tag }}
+      ngui: {{ .Values.ngui.imageTag | default $tag }}
+      herald: {{ .Values.herald.imageTag | default $tag }}
+      katara_service: {{ .Values.katara.imageTag | default $tag }}
+      katara_worker: {{ .Values.katara.imageTag | default $tag }}
+      cleaninfluxdb: {{ $tag }}
+      {{- if .Values.grafana.enabled }}
+      grafana: {{ .Values.grafana.imageTag | default $tag }}
+      grafana_nginx: {{ .Values.grafana.imageTag | default $tag }}
+      {{- end }}
+      {{- if .Values.elk.enabled }}
+      elk: {{ .Values.elk.imageTag | default $tag }}
+      filebeat: {{ .Values.elk.imageTag | default $tag }}
+      {{- end }}

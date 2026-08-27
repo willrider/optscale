@@ -1,0 +1,313 @@
+{{- $cfg := .Values.rabbitmq }}
+{{- $discovery := printf "%s-discovery" $cfg.name }}
+
+{{- define "optscale.rabbitmq.conf" -}}
+cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+cluster_formation.k8s.host = kubernetes.default.svc.{{ .Values.global.clusterDomain }}
+cluster_formation.k8s.address_type = hostname
+cluster_formation.node_cleanup.interval = 10
+cluster_formation.node_cleanup.only_log_warning = true
+cluster_partition_handling = autoheal
+load_definitions = /etc/definitions/definitions.json
+vm_memory_high_watermark.absolute = {{ .Values.rabbitmq.memoryLimitMb }}MB
+deprecated_features.permit.queue_master_locator = false
+deprecated_features.permit.global_qos = false
+deprecated_features.permit.ram_node_type = false
+deprecated_features.permit.transient_nonexcl_queues = false
+deprecated_features.permit.amqp_filter_set_bug = false
+deprecated_features.permit.amqp_address_v1 = false
+{{- end -}}
+
+{{- define "optscale.rabbitmq.definitions" -}}
+{
+  "vhosts": [{"name": "/"}],
+  "users": [
+    {
+      "name": {{ .Values.rabbitmq.user | quote }},
+      "password": {{ .Values.rabbitmq.password | quote }},
+      "tags": "administrator"
+    }
+  ],
+  "permissions": [
+    {
+      "user": {{ .Values.rabbitmq.user | quote }},
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "policies": [
+    {
+      "vhost": "/",
+      "name": "qq-runtime-defaults",
+      "pattern": "^(?!amq\\.).*",
+      "apply-to": "quorum_queues",
+      "definition": {
+        "delivery-limit": {{ .Values.rabbitmq.quorum.deliveryLimit }}
+      }
+    }
+  ]
+}
+{{- end -}}
+{{- if not $cfg.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbit-secret
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+type: Opaque
+data:
+  username: {{ $cfg.user | b64enc | quote }}
+  password: {{ $cfg.password | b64enc | quote }}
+  management-username: {{ $cfg.user | b64enc | quote }}
+  management-password: {{ $cfg.password | b64enc | quote }}
+  erlang-cookie: {{ $cfg.erlangCookie | b64enc | quote }}
+  definitions.json: {{ include "optscale.rabbitmq.definitions" . | b64enc | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+data:
+  enabled_plugins: |
+    [rabbitmq_shovel,rabbitmq_shovel_management,rabbitmq_federation,rabbitmq_federation_management,rabbitmq_consistent_hash_exchange,rabbitmq_management,rabbitmq_peer_discovery_k8s].
+  rabbitmq.conf: |
+    {{- include "optscale.rabbitmq.conf" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints", "pods", "services", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch", "update", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rabbitmq
+subjects:
+  - kind: ServiceAccount
+    name: rabbitmq
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $discovery }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: {{ $cfg.managementPort }}
+      targetPort: http
+    - name: amqp
+      port: {{ $cfg.port }}
+      targetPort: amqp
+    - name: epmd
+      port: 4369
+      targetPort: epmd
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: amqp
+      port: {{ $cfg.port }}
+      targetPort: amqp
+    - name: http
+      port: {{ $cfg.managementPort }}
+      targetPort: http
+    - name: epmd
+      port: 4369
+      targetPort: epmd
+  selector:
+    {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $cfg.name }}
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $discovery }}
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "optscale.rabbitmq.conf" . | sha256sum }}
+        {{- if not $cfg.existingSecret }}
+        checksum/definitions: {{ include "optscale.rabbitmq.definitions" . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: rabbitmq
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      {{- include "optscale.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: copy-rabbitmq-config
+          image: {{ $cfg.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 999
+            runAsGroup: 999
+          command: ['sh', '-c', 'cp /configmap/* /etc/rabbitmq/']
+          volumeMounts:
+            - name: configmap
+              mountPath: /configmap
+            - name: config
+              mountPath: /etc/rabbitmq
+      containers:
+        - name: {{ $cfg.name }}
+          image: {{ $cfg.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "optscale.rabbitmq.secretName" . }}
+                  key: username
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "optscale.rabbitmq.secretName" . }}
+                  key: password
+            - name: MY_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RABBITMQ_USE_LONGNAME
+              value: "true"
+            - name: RABBITMQ_NODENAME
+              value: "rabbit@$(MY_POD_NAME).{{ $discovery }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}"
+            - name: K8S_HOSTNAME_SUFFIX
+              value: ".{{ $discovery }}.{{ .Release.Namespace }}.svc.{{ .Values.global.clusterDomain }}"
+            - name: K8S_SERVICE_NAME
+              value: {{ $discovery | quote }}
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "optscale.rabbitmq.secretName" . }}
+                  key: erlang-cookie
+            - name: HOME
+              value: /var/lib/rabbitmq
+            - name: RABBITMQ_PLUGINS_EXPAND_DIR
+              value: /var/lib/rabbitmq/plugins-expand
+          ports:
+            - name: epmd
+              containerPort: 4369
+            - name: amqp
+              containerPort: {{ $cfg.port }}
+            - name: http
+              containerPort: {{ $cfg.managementPort }}
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rabbitmq
+            - name: datadir
+              mountPath: /var/lib/rabbitmq
+            - name: mnesia
+              mountPath: /var/lib/rabbitmq/mnesia
+            - name: definitions
+              mountPath: /etc/definitions
+              readOnly: true
+      volumes:
+        - name: config
+          emptyDir: {}
+        - name: configmap
+          configMap:
+            name: rabbitmq-config
+        - name: datadir
+          emptyDir: {}
+        - name: definitions
+          secret:
+            secretName: {{ include "optscale.rabbitmq.secretName" . }}
+            items:
+              - key: definitions.json
+                path: definitions.json
+        {{- if not $cfg.persistence.enabled }}
+        - name: mnesia
+          emptyDir: {}
+        {{- end }}
+      {{- include "optscale.podScheduling" (dict "root" . "comp" $cfg) | nindent 6 }}
+  {{- if $cfg.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: mnesia
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with ($cfg.persistence.storageClass | default .Values.global.storageClass) }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cfg.persistence.size }}
+  {{- end }}

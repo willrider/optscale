@@ -1,0 +1,141 @@
+{{- if .Values.ingress.enabled }}
+{{- $v := .Values }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: optscale
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "optscale") | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/custom-http-errors: "503"
+    nginx.ingress.kubernetes.io/default-backend: {{ $v.apis.errorPages.name }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ $v.ingress.proxyBodySize | quote }}
+    nginx.ingress.kubernetes.io/client-body-buffer-size: {{ $v.ingress.proxyBodySize | quote }}
+    nginx.ingress.kubernetes.io/connection-proxy-header: "keep-alive"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ $v.ingress.proxyReadTimeout | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ $v.ingress.proxySendTimeout | quote }}
+    {{- if and $v.ingress.tls.enabled $v.ingress.forceSslRedirect }}
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    {{- end }}
+    {{- if $v.ingress.tls.certManager.enabled }}
+    cert-manager.io/{{ $v.ingress.tls.certManager.issuerType }}: {{ $v.ingress.tls.certManager.issuer | quote }}
+    {{- end }}
+    {{- with $v.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with $v.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.auth.name }}
+                port:
+                  number: {{ $v.apis.auth.servicePort }}
+          - path: /restapi
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.restapi.name }}
+                port:
+                  number: {{ $v.apis.restapi.servicePort }}
+          - path: /report
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.keeper.name }}
+                port:
+                  number: {{ $v.apis.keeper.servicePort }}
+          - path: /herald
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.herald.name }}
+                port:
+                  number: {{ $v.herald.servicePort }}
+          - path: /katara
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.katara.name }}
+                port:
+                  number: {{ $v.katara.servicePort }}
+          - path: /insider
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.insider.name }}
+                port:
+                  number: {{ $v.apis.insider.servicePort }}
+          - path: /slacker
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.slacker.name }}
+                port:
+                  number: {{ $v.apis.slacker.servicePort }}
+          - path: /metroculus
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.metroculus.name }}
+                port:
+                  number: {{ $v.apis.metroculus.servicePort }}
+          - path: /jira_bus
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.jirabus.name }}
+                port:
+                  number: {{ $v.apis.jirabus.servicePort }}
+          - path: /jira_ui
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.jiraui.name }}
+                port:
+                  number: {{ $v.apis.jiraui.servicePort }}
+          {{- if $v.thanos.enabled }}
+          - path: /storage
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.diproxy.name }}
+                port:
+                  number: {{ $v.apis.diproxy.servicePort }}
+          {{- end }}
+          {{- if $v.config.stripe.enabled }}
+          - path: /subspector
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.apis.subspector.name }}
+                port:
+                  number: {{ $v.apis.subspector.servicePort }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $v.ngui.name }}
+                port:
+                  number: {{ $v.ngui.servicePort }}
+      {{- with $v.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+  {{- if $v.ingress.tls.enabled }}
+  tls:
+    - secretName: {{ $v.ingress.tls.secretName }}
+      {{- with $v.ingress.host }}
+      hosts:
+        - {{ . | quote }}
+      {{- end }}
+  {{- end }}
+{{- end }}
