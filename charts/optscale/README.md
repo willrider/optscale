@@ -172,6 +172,27 @@ writes the new config into etcd. `--dry-run` prints the manifests instead
 of applying. Note that the database passwords cannot be rotated by
 re-running the script alone: they are baked into the data volumes.
 
+### Generating a GitOps deployment: `hack/generate-gitops.sh`
+
+`hack/generate-gitops.sh` scaffolds (and keeps updated) an Argo CD
+deployment of this chart in a gitops repository: it vendors the chart into
+`<gitops-repo>/charts/optscale` and writes an `apps/<name>.yaml` Argo CD
+Application wired for the patterns above — bootstrap-Secret references,
+the configurator as a Sync-phase hook, and `ignoreDifferences` for the
+server-defaulted StatefulSet `volumeClaimTemplates` fields:
+
+```bash
+charts/optscale/hack/generate-gitops.sh \
+  --dest ~/git/my-gitops \
+  --repo-url git@github.com:me/my-gitops.git \
+  --host optscale.example.com \
+  --issuer letsencrypt-prod          # omit to manage the TLS secret yourself
+```
+
+The script validates the result with `helm lint` + `helm template` and is
+deterministic — rerun it after chart updates and commit the diff. See
+`--help` for all flags (ingress class, namespaces, proxy URL, ...).
+
 ### Enabling paid-feature components
 
 `config.stripe.enabled=true` additionally deploys `subspector`,
