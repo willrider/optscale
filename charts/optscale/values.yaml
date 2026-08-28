@@ -30,6 +30,14 @@ global:
 # Image used by "wait for dependency" init containers.
 waitImage: busybox:1.37.0
 
+networkPolicy:
+  # Block direct-to-MX mail (egress TCP 25) from all pods. Herald's image
+  # contains a sendmail MTA it falls back to when config.smtp is unset,
+  # which gets the cluster's egress IP blocklisted (Spamhaus CSS). Real
+  # SMTP submission via config.smtp on ports 465/587 is unaffected. Only
+  # disable this if you point config.smtp at a server on port 25.
+  blockSmtpEgress: true
+
 ##############################################################################
 # Platform configuration — everything here ends up in etcd via the
 # configurator Job. Values map 1:1 to optscale-deploy config semantics.

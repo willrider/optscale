@@ -1,0 +1,28 @@
+{{- if .Values.networkPolicy.blockSmtpEgress }}
+---
+# Herald's image ships a full sendmail MTA and falls back to it when no
+# SMTP server is configured (config.smtp), delivering mail DIRECT-TO-MX
+# with the pod hostname as HELO — which gets the egress IP listed on
+# Spamhaus CSS. Block outbound TCP 25 from every pod in the release;
+# submission to a real SMTP relay on 465/587 (config.smtp) stays open.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: block-smtp-egress
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "block-smtp-egress") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 1
+          endPort: 24
+        - protocol: TCP
+          port: 26
+          endPort: 65535
+        - protocol: UDP
+          port: 1
+          endPort: 65535
+{{- end }}

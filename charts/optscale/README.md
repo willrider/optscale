@@ -65,7 +65,12 @@ also written into etcd.
   pull pricing catalogs. **Recommendations do not work without them** (see
   `optscale-deploy/overlay/user_template.yml` for the expected structure).
 - Configure `config.smtp` for outgoing email, or leave
-  `config.disableEmailVerification: true`.
+  `config.disableEmailVerification: true`. Note: with no SMTP configured,
+  herald falls back to a sendmail MTA **inside its image** and tries to
+  deliver alert emails direct-to-MX — which will get your egress IP listed
+  on Spamhaus. The chart blocks this by default via a NetworkPolicy on
+  egress TCP 25 (`networkPolicy.blockSmtpEgress`); point `config.smtp` at a
+  real relay on 465/587 to actually deliver mail.
 - Size persistence (`*.persistence.size`) for your data volume; MariaDB,
   MongoDB and ClickHouse hold the durable data, MinIO holds report files
   and Thanos blocks.
