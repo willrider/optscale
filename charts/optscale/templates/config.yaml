@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: optscale-config
+  labels:
+    {{- include "optscale.labels" (dict "root" . "name" "configurator") | nindent 4 }}
+  annotations:
+    # Argo CD: apply before the configurator Sync hook (wave 0) starts, so a
+    # changed config is what the hook reads.
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  config.yaml: |
+    {{- include "optscale.configYaml" . | nindent 4 }}
+  configure.py: |
+    {{- .Files.Get "files/configure.py" | nindent 4 }}

@@ -1,17 +1,4 @@
 {{- $cfg := .Values.minio }}
-{{- if not $cfg.existingSecret }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: minio-secret
-  labels:
-    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
-type: Opaque
-data:
-  access: {{ $cfg.accessKey | b64enc | quote }}
-  secret: {{ $cfg.secretKey | b64enc | quote }}
-{{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -1,8 +1,10 @@
 {{/*
-Configuration consumed by the configurator Job. The `etcd:` branch is
-written key-by-key into etcd; everything else instructs the configurator
-itself (databases to create, etc.). Keep hosts/ports in sync with the
-component definitions in values.yaml — they are all referenced from there.
+Non-secret configuration consumed by the configurator Job (ConfigMap
+optscale-config). The `etcd:` branch is written key-by-key into etcd;
+everything else instructs the configurator itself (databases to create,
+etc.). Credential fields are left empty here: files/configure.py fills them
+at runtime from the component Secrets, the encryption Secret and the
+secret-config overlay.
 */}}
 {{- define "optscale.configYaml" -}}
 {{- $v := .Values -}}
@@ -17,7 +19,7 @@ etcd:
   public_ip: {{ include "optscale.publicIp" . | quote }}
   company_name: {{ $c.companyName | quote }}
   product_name: {{ $c.productName | quote }}
-  encryption_key: {{ $c.encryptionKey | quote }}
+  encryption_key: ""
   release: {{ .Release.Name | quote }}
   katara_scheduler_timeout: {{ $c.kataraSchedulerTimeout }}
   bumi_scheduler_timeout: {{ $c.bumiSchedulerTimeout }}
@@ -42,9 +44,6 @@ etcd:
   google_calendar_service:
     enabled: {{ $c.googleCalendarService.enabled }}
     access_key:
-{{- range $key, $value := $c.googleCalendarService.accessKey }}
-      {{ $key }}: {{ $value | quote }}
-{{- end }}
   domains_blacklists:
     new_employee_email:
 {{- range $c.domainsBlacklists.newEmployeeEmail }}
@@ -72,8 +71,8 @@ etcd:
       - {{ . | quote }}
 {{- end }}
   secret:
-    cluster: {{ $c.secrets.cluster | quote }}
-    agent: {{ $c.secrets.agent | quote }}
+    cluster: ""
+    agent: ""
   images_source:
     host: {{ printf "%s/%s" $v.global.imageRegistry $v.global.imageOrg | quote }}
     tag: {{ include "optscale.tag" . | quote }}
@@ -137,47 +136,47 @@ etcd:
   authdb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: auth-db
   heralddb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: herald
   restdb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: my-db
     port: {{ $v.mariadb.port }}
   kataradb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: katara
   slackerdb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: slacker
     port: {{ $v.mariadb.port }}
   jirabusdb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: jira-bus
     port: {{ $v.mariadb.port }}
   subspectordb:
     host: {{ $v.mariadb.name | quote }}
     user: root
-    password: {{ $v.mariadb.rootPassword | quote }}
+    password: ""
     db: subspector
     port: {{ $v.mariadb.port }}
   mongo:
 {{- if $v.mongo.external.enabled }}
-    url: {{ required "mongo.external.url is required when mongo.external.enabled" $v.mongo.external.url | quote }}
+    url: ""
 {{- else }}
-    url: {{ printf "mongodb://%s:%s@%s:%v" $v.mongo.user $v.mongo.password $v.mongo.name $v.mongo.servicePort | quote }}
+    url: {{ printf "mongodb://%s:%v" $v.mongo.name $v.mongo.servicePort | quote }}
 {{- end }}
     database: keeper
   influxdb:
@@ -187,20 +186,20 @@ etcd:
     pass: ""
     database: metrics
   rabbit:
-    user: {{ $v.rabbitmq.user | quote }}
-    pass: {{ $v.rabbitmq.password | quote }}
+    user: ""
+    pass: ""
     host: {{ $v.rabbitmq.name | quote }}
     port: {{ $v.rabbitmq.port }}
   minio:
     host: {{ $v.minio.name | quote }}
     port: {{ $v.minio.servicePort }}
-    access: {{ $v.minio.accessKey | quote }}
-    secret: {{ $v.minio.secretKey | quote }}
+    access: ""
+    secret: ""
   clickhouse:
     host: {{ $v.clickhouse.name | quote }}
     port: {{ $v.clickhouse.httpPort }}
     user: {{ $v.clickhouse.user | quote }}
-    password: {{ $v.clickhouse.password | quote }}
+    password: ""
     db: {{ $v.clickhouse.db | quote }}
   cleanmongodb:
     chunk_size: {{ $c.cleanmongodb.chunkSize }}
@@ -209,16 +208,8 @@ etcd:
     file_max_rows: {{ $c.cleanmongodb.fileMaxRows }}
   disable_email_verification: {{ $c.disableEmailVerification }}
   force_aws_edp_strip: {{ $c.forceAwsEdpStrip | quote }}
-  encryption_salt: {{ $c.encryptionSalt | quote }}
-  encryption_salt_auth: {{ $c.encryptionSaltAuth | quote }}
-{{- with $c.zohocrm.regapp }}
-  zohocrm:
-    regapp_email: {{ .email | quote }}
-    regapp_client_id: {{ .client_id | quote }}
-    regapp_client_secret: {{ .client_secret | quote }}
-    regapp_refresh_token: {{ .refresh_token | quote }}
-    regapp_redirect_uri: {{ .redirect_uri | quote }}
-{{- end }}
+  encryption_salt: ""
+  encryption_salt_auth: ""
   certificates:
 {{- range $key, $val := $c.certificates }}
     {{ $key }}: {{ $val | quote }}
@@ -238,16 +229,15 @@ etcd:
     bucket: {{ $c.usersDatasetGenerator.bucket | quote }}
     s3_path: {{ $c.usersDatasetGenerator.s3Path | quote }}
     filename: {{ $c.usersDatasetGenerator.filename | quote }}
-    aws_access_key_id: {{ $c.usersDatasetGenerator.awsAccessKeyId | quote }}
-    aws_secret_access_key: {{ $c.usersDatasetGenerator.awsSecretAccessKey | quote }}
-  service_credentials:
-{{ toYaml $c.serviceCredentials | indent 4 }}
+    aws_access_key_id: ""
+    aws_secret_access_key: ""
+  service_credentials: {}
   smtp:
     server: {{ $c.smtp.server | quote }}
     email: {{ $c.smtp.email | quote }}
     login: {{ $c.smtp.login | quote }}
     port: {{ $c.smtp.port | quote }}
-    password: {{ $c.smtp.password | quote }}
+    password: ""
     protocol: {{ $c.smtp.protocol | quote }}
   resource_discovery_settings:
     discover_size: {{ $c.resourceDiscoverySettings.discoverSize }}
@@ -257,15 +247,15 @@ etcd:
     debug: {{ $c.resourceDiscoverySettings.debug | quote }}
   bi_settings:
     exporter_run_period: {{ $c.biSettings.exporterRunPeriod }}
-    encryption_key: {{ $c.biSettings.encryptionKey | quote }}
+    encryption_key: ""
     task_wait_timeout: {{ $c.biSettings.taskWaitTimeout }}
   failed_imports_dataset_generator:
     enable: {{ $c.failedImportsDatasetGenerator.enable }}
     bucket: {{ $c.failedImportsDatasetGenerator.bucket | quote }}
     s3_path: {{ $c.failedImportsDatasetGenerator.s3Path | quote }}
     filename: {{ $c.failedImportsDatasetGenerator.filename | quote }}
-    aws_access_key_id: {{ $c.failedImportsDatasetGenerator.awsAccessKeyId | quote }}
-    aws_secret_access_key: {{ $c.failedImportsDatasetGenerator.awsSecretAccessKey | quote }}
+    aws_access_key_id: ""
+    aws_secret_access_key: ""
   subspector:
     host: {{ $v.apis.subspector.name | quote }}
     port: {{ $v.apis.subspector.servicePort }}
@@ -291,8 +281,8 @@ etcd:
     {{ $currency }}: {{ $rate }}
 {{- end }}
   stripe:
-    api_key: {{ $c.stripe.apiKey | quote }}
-    webhook_secret: {{ $c.stripe.webhookSecret | quote }}
+    api_key: ""
+    webhook_secret: ""
     enabled: {{ $c.stripe.enabled }}
   opentelemetry:
     enabled: {{ $c.opentelemetry.enabled }}
@@ -310,4 +300,32 @@ etcd:
 {{- with $c.extra }}
 {{ toYaml . | indent 2 }}
 {{- end }}
+{{- end -}}
+
+{{/*
+Secret-bearing etcd configuration taken from values (only rendered into the
+optscale-secret-config Secret when config.existingSecretConfig is unset).
+Deep-merged over the etcd branch by files/configure.py.
+*/}}
+{{- define "optscale.secretConfigYaml" -}}
+{{- $c := .Values.config -}}
+{{- $o := dict -}}
+{{- with $c.secrets.agent }}{{- $_ := set $o "secret" (dict "agent" .) }}{{- end }}
+{{- with $c.smtp.password }}{{- $_ := set $o "smtp" (dict "password" .) }}{{- end }}
+{{- with $c.serviceCredentials }}{{- $_ := set $o "service_credentials" . }}{{- end }}
+{{- with $c.googleCalendarService.accessKey }}{{- $_ := set $o "google_calendar_service" (dict "access_key" .) }}{{- end }}
+{{- $stripe := dict }}
+{{- with $c.stripe.apiKey }}{{- $_ := set $stripe "api_key" . }}{{- end }}
+{{- with $c.stripe.webhookSecret }}{{- $_ := set $stripe "webhook_secret" . }}{{- end }}
+{{- if $stripe }}{{- $_ := set $o "stripe" $stripe }}{{- end }}
+{{- with $c.zohocrm.regapp }}
+{{- $_ := set $o "zohocrm" (dict "regapp_email" .email "regapp_client_id" .client_id "regapp_client_secret" .client_secret "regapp_refresh_token" .refresh_token "regapp_redirect_uri" .redirect_uri) }}
+{{- end }}
+{{- range $key, $gen := dict "users_dataset_generator" $c.usersDatasetGenerator "failed_imports_dataset_generator" $c.failedImportsDatasetGenerator }}
+{{- $aws := dict }}
+{{- with $gen.awsAccessKeyId }}{{- $_ := set $aws "aws_access_key_id" . }}{{- end }}
+{{- with $gen.awsSecretAccessKey }}{{- $_ := set $aws "aws_secret_access_key" . }}{{- end }}
+{{- if $aws }}{{- $_ := set $o $key $aws }}{{- end }}
+{{- end }}
+{{- toYaml $o }}
 {{- end -}}

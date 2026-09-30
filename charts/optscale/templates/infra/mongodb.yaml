@@ -1,20 +1,6 @@
 {{- if not .Values.mongo.external.enabled }}
 {{- $cfg := .Values.mongo }}
 {{- $image := include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) }}
-{{- if not $cfg.existingSecret }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: mongo-secret
-  labels:
-    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
-type: Opaque
-data:
-  username: {{ $cfg.user | b64enc | quote }}
-  password: {{ $cfg.password | b64enc | quote }}
-  key.txt: {{ $cfg.key | b64enc | quote }}
-{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap

@@ -26,10 +26,13 @@ Ingress is disabled. To reach the UI locally:
 Register the first user through the web UI — the first registered user
 becomes the organization owner.
 
-{{- if eq .Values.config.secrets.cluster "change-me-in-production" }}
+{{- if .Values.secretsInit.enabled }}
 
-WARNING: config.secrets.cluster still has its default value. Set a unique
-secret before using this installation in production.
+Credentials were generated into Secrets on first install (secrets-init hook)
+and are reused on every upgrade. Back them up — the database volumes depend
+on them:
+
+  kubectl -n {{ .Release.Namespace }} get secret -l app.kubernetes.io/created-by=optscale-secrets-init -o yaml > optscale-credentials.yaml
 {{- end }}
 {{- if not .Values.config.serviceCredentials }}
 

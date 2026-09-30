@@ -3,8 +3,8 @@ type: S3
 config:
   bucket: {{ .Values.thanos.bucket | quote }}
   endpoint: "{{ .Values.minio.name }}:{{ .Values.minio.servicePort }}"
-  access_key: {{ .Values.minio.accessKey | quote }}
-  secret_key: {{ .Values.minio.secretKey | quote }}
+  # Credentials come from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (MinIO
+  # Secret): with access_key unset the S3 client uses the AWS env chain.
   insecure: true
 prefix: "data"
 {{- end -}}
@@ -28,21 +28,23 @@ readinessProbe:
   failureThreshold: 6
 {{- end -}}
 
+{{- define "optscale.thanos.s3Env" -}}
+{{- include "optscale.secretEnv" (dict "name" "AWS_ACCESS_KEY_ID" "secret" (include "optscale.minio.secretName" .) "key" "access") }}
+{{ include "optscale.secretEnv" (dict "name" "AWS_SECRET_ACCESS_KEY" "secret" (include "optscale.minio.secretName" .) "key" "secret") }}
+{{- end -}}
+
 {{- if .Values.thanos.enabled }}
 {{- $t := .Values.thanos }}
-{{- if not $t.existingObjstoreSecret }}
 ---
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
-  name: thanos-secret
+  name: thanos-objstore
   labels:
     {{- include "optscale.labels" (dict "root" . "name" "thanos") | nindent 4 }}
-type: Opaque
-stringData:
+data:
   thanos_conf.yaml: |
     {{- include "optscale.thanos.objstore" . | nindent 4 }}
-{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -128,6 +130,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- include "optscale.thanos.s3Env" . | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ $t.receive.httpPort }}
@@ -150,8 +153,8 @@ spec:
               mountPath: /var/thanos/limits_config
       volumes:
         - name: config
-          secret:
-            secretName: {{ include "optscale.thanos.secretName" . }}
+          configMap:
+            name: thanos-objstore
         - name: limits-config
           configMap:
             name: {{ $t.receive.name }}-limits-config
@@ -228,6 +231,8 @@ spec:
             - --ignore-deletion-marks-delay={{ $t.storegateway.ignoreDeletionMarksDelay }}
             - --objstore.config-file=/var/thanos/config/thanos_conf.yaml
             - --data-dir=/var/thanos/data
+          env:
+            {{- include "optscale.thanos.s3Env" . | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ $t.storegateway.httpPort }}
@@ -246,8 +251,8 @@ spec:
               readOnly: true
       volumes:
         - name: config
-          secret:
-            secretName: {{ include "optscale.thanos.secretName" . }}
+          configMap:
+            name: thanos-objstore
         {{- if not $t.storegateway.persistence.enabled }}
         - name: data
           emptyDir: {}
@@ -402,6 +407,8 @@ spec:
                 - --retention.resolution-5m={{ $t.compactor.retentionResolution5m }}
                 - --retention.resolution-1h={{ $t.compactor.retentionResolution1h }}
                 - --compact.enable-vertical-compaction
+              env:
+                {{- include "optscale.thanos.s3Env" . | nindent 16 }}
               {{- with $t.compactor.resources }}
               resources:
                 {{- toYaml . | nindent 16 }}
@@ -414,8 +421,8 @@ spec:
                   mountPath: /var/thanos/data
           volumes:
             - name: config
-              secret:
-                secretName: {{ include "optscale.thanos.secretName" . }}
+              configMap:
+                name: thanos-objstore
             - name: data
               {{- if $t.compactor.persistence.enabled }}
               persistentVolumeClaim:
@@ -471,6 +478,8 @@ spec:
             - --http-address=0.0.0.0:{{ $t.web.httpPort }}
             - --objstore.config-file=/var/thanos/config/thanos_conf.yaml
             - --refresh={{ $t.web.refreshInterval }}
+          env:
+            {{- include "optscale.thanos.s3Env" . | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ $t.web.httpPort }}
@@ -485,8 +494,8 @@ spec:
               readOnly: true
       volumes:
         - name: config
-          secret:
-            secretName: {{ include "optscale.thanos.secretName" . }}
+          configMap:
+            name: thanos-objstore
       {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}
 {{- end }}
 {{- end }}

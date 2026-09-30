@@ -1,5 +1,9 @@
 {{- $hook := .Values.configurator.argocdHook }}
 {{- $name := ternary "configurator" (printf "configurator-r%d" .Release.Revision) $hook }}
+{{- $mongo := include "optscale.mongo.secretName" . }}
+{{- $rabbit := include "optscale.rabbitmq.secretName" . }}
+{{- $minio := include "optscale.minio.secretName" . }}
+{{- $encryption := include "optscale.encryptionSecretName" . }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -7,17 +11,14 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "optscale.labels" (dict "root" . "name" "configurator") | nindent 4 }}
+  {{- if $hook }}
   annotations:
-    {{- if $hook }}
     # Run as an Argo CD Sync-phase hook: recreated on every sync, never
     # tracked as live state (plain Jobs are immutable and .Release.Revision
     # is always 1 under Argo CD).
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
-    {{- end }}
-    {{- if not .Values.configurator.existingConfigSecret }}
-    checksum/config: {{ include "optscale.configYaml" . | sha256sum }}
-    {{- end }}
+  {{- end }}
 spec:
   backoffLimit: {{ .Values.configurator.backoffLimit }}
   {{- if not $hook }}
@@ -37,47 +38,51 @@ spec:
         - name: configurator
           image: {{ include "optscale.image" (dict "root" . "repo" .Values.configurator.image "tag" .Values.configurator.imageTag) | quote }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          # The released configurator cannot replace etcd keys that changed
-          # from leaf to directory (or vice versa), so recursively drop the
-          # rewritable telemetry branches before it runs — mirrors the
-          # workaround in optscale-deploy/compose/docker-compose.yml.
-          command:
-            - sh
-            - -ec
-            - |
-              uv --project docker_images/configurator run python - <<'PY'
-              import os
-              import etcd
-              from optscale_client.config_client.client import Client
-
-              client = Client(
-                  host=os.environ["HX_ETCD_HOST"],
-                  port=int(os.environ["HX_ETCD_PORT"]),
-              )
-              for key in (
-                  "/opentelemetry",
-                  "/auth/opentelemetry",
-                  "/restapi/opentelemetry",
-                  "/diworker/opentelemetry",
-              ):
-                  try:
-                      client.delete(key, recursive=True)
-                  except etcd.EtcdKeyNotFound:
-                      pass
-              PY
-              uv --project docker_images/configurator run python3 docker_images/configurator/configurator.py /config/config
+          command: ["uv", "--project", "docker_images/configurator", "run", "python", "/config/base/configure.py"]
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "MARIADB_PASSWORD" "secret" (include "optscale.mariadb.secretName" .) "key" "password") | nindent 12 }}
+            {{- if .Values.mongo.external.enabled }}
+            {{- include "optscale.secretEnv" (dict "name" "MONGO_URL" "secret" $mongo "key" "url") | nindent 12 }}
+            {{- else }}
+            {{- include "optscale.secretEnv" (dict "name" "MONGO_USERNAME" "secret" $mongo "key" "username") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "MONGO_PASSWORD" "secret" $mongo "key" "password") | nindent 12 }}
+            {{- end }}
+            {{- include "optscale.secretEnv" (dict "name" "RABBITMQ_USERNAME" "secret" $rabbit "key" "username") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "RABBITMQ_PASSWORD" "secret" $rabbit "key" "password") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "MINIO_ACCESS_KEY" "secret" $minio "key" "access") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "MINIO_SECRET_KEY" "secret" $minio "key" "secret") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "CLICKHOUSE_PASSWORD" "secret" (include "optscale.clickhouse.secretName" .) "key" "password") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "CLUSTER_SECRET" "secret" (include "optscale.clusterSecretName" .) "key" "cluster_secret") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "ENCRYPTION_KEY" "secret" $encryption "key" "encryption-key") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "ENCRYPTION_SALT" "secret" $encryption "key" "encryption-salt") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "ENCRYPTION_SALT_AUTH" "secret" $encryption "key" "encryption-salt-auth") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "BI_ENCRYPTION_KEY" "secret" $encryption "key" "bi-encryption-key") | nindent 12 }}
           volumeMounts:
-            - name: config-volume
-              mountPath: /config
+            - name: base
+              mountPath: /config/base
               readOnly: true
+            - name: overlays
+              mountPath: /config/overlays
+              readOnly: true
+            - name: work
+              mountPath: /work
           {{- with .Values.configurator.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        - name: config-volume
+        - name: base
+          configMap:
+            name: optscale-config
+        - name: overlays
           secret:
-            secretName: {{ include "optscale.configSecretName" . }}
+            secretName: {{ include "optscale.secretConfigName" . }}
+            optional: true
+            items:
+              - key: etcd.yaml
+                path: etcd.yaml
+        - name: work
+          emptyDir:
+            medium: Memory
       {{- include "optscale.podScheduling" (dict "root" .) | nindent 6 }}

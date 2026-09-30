@@ -18,55 +18,6 @@ deprecated_features.permit.amqp_filter_set_bug = false
 deprecated_features.permit.amqp_address_v1 = false
 {{- end -}}
 
-{{- define "optscale.rabbitmq.definitions" -}}
-{
-  "vhosts": [{"name": "/"}],
-  "users": [
-    {
-      "name": {{ .Values.rabbitmq.user | quote }},
-      "password": {{ .Values.rabbitmq.password | quote }},
-      "tags": "administrator"
-    }
-  ],
-  "permissions": [
-    {
-      "user": {{ .Values.rabbitmq.user | quote }},
-      "vhost": "/",
-      "configure": ".*",
-      "write": ".*",
-      "read": ".*"
-    }
-  ],
-  "policies": [
-    {
-      "vhost": "/",
-      "name": "qq-runtime-defaults",
-      "pattern": "^(?!amq\\.).*",
-      "apply-to": "quorum_queues",
-      "definition": {
-        "delivery-limit": {{ .Values.rabbitmq.quorum.deliveryLimit }}
-      }
-    }
-  ]
-}
-{{- end -}}
-{{- if not $cfg.existingSecret }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: rabbit-secret
-  labels:
-    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
-type: Opaque
-data:
-  username: {{ $cfg.user | b64enc | quote }}
-  password: {{ $cfg.password | b64enc | quote }}
-  management-username: {{ $cfg.user | b64enc | quote }}
-  management-password: {{ $cfg.password | b64enc | quote }}
-  erlang-cookie: {{ $cfg.erlangCookie | b64enc | quote }}
-  definitions.json: {{ include "optscale.rabbitmq.definitions" . | b64enc | quote }}
-{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -181,9 +132,6 @@ spec:
         {{- include "optscale.selectorLabels" (dict "root" . "name" $cfg.name) | nindent 8 }}
       annotations:
         checksum/config: {{ include "optscale.rabbitmq.conf" . | sha256sum }}
-        {{- if not $cfg.existingSecret }}
-        checksum/definitions: {{ include "optscale.rabbitmq.definitions" . | sha256sum }}
-        {{- end }}
     spec:
       serviceAccountName: rabbitmq
       terminationGracePeriodSeconds: 10
@@ -192,18 +140,41 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       {{- include "optscale.imagePullSecrets" . | nindent 6 }}
       initContainers:
-        - name: copy-rabbitmq-config
+        # Copies the config and writes definitions.json (user, permissions,
+        # quorum-queue policy) from the credentials Secret, so the Secret only
+        # holds plain credentials.
+        - name: prepare-config
           image: {{ $cfg.image | quote }}
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsUser: 999
             runAsGroup: 999
-          command: ['sh', '-c', 'cp /configmap/* /etc/rabbitmq/']
+          env:
+            {{- include "optscale.secretEnv" (dict "name" "RABBITMQ_USERNAME" "secret" (include "optscale.rabbitmq.secretName" .) "key" "username") | nindent 12 }}
+            {{- include "optscale.secretEnv" (dict "name" "RABBITMQ_PASSWORD" "secret" (include "optscale.rabbitmq.secretName" .) "key" "password") | nindent 12 }}
+          command:
+            - sh
+            - -ec
+            - |
+              cp /configmap/* /etc/rabbitmq/
+              esc() { printf '%s' "$1" | sed -e 's/[\\"]/\\&/g'; }
+              user=$(esc "$RABBITMQ_USERNAME")
+              pass=$(esc "$RABBITMQ_PASSWORD")
+              cat > /etc/definitions/definitions.json <<EOF
+              {"vhosts": [{"name": "/"}],
+               "users": [{"name": "$user", "password": "$pass", "tags": "administrator"}],
+               "permissions": [{"user": "$user", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*"}],
+               "policies": [{"vhost": "/", "name": "qq-runtime-defaults", "pattern": "^(?!amq\\\\.).*",
+                             "apply-to": "quorum_queues",
+                             "definition": {"delivery-limit": {{ $cfg.quorum.deliveryLimit }}}}]}
+              EOF
           volumeMounts:
             - name: configmap
               mountPath: /configmap
             - name: config
               mountPath: /etc/rabbitmq
+            - name: definitions
+              mountPath: /etc/definitions
       containers:
         - name: {{ $cfg.name }}
           image: {{ $cfg.image | quote }}
@@ -288,11 +259,8 @@ spec:
         - name: datadir
           emptyDir: {}
         - name: definitions
-          secret:
-            secretName: {{ include "optscale.rabbitmq.secretName" . }}
-            items:
-              - key: definitions.json
-                path: definitions.json
+          emptyDir:
+            medium: Memory
         {{- if not $cfg.persistence.enabled }}
         - name: mnesia
           emptyDir: {}

@@ -1,10 +1,13 @@
 # Default values for the OptScale Helm chart.
 #
 # OptScale is configured through etcd: a configurator Job seeds etcd (and
-# creates MariaDB databases, RabbitMQ queues, MinIO buckets, ...) from the
-# rendered config in `templates/config-secret.yaml`. Application pods only
-# receive HX_ETCD_HOST / HX_ETCD_PORT and read everything else from etcd,
-# blocking at startup until the configurator has finished.
+# creates MariaDB databases, RabbitMQ queues, MinIO buckets, ...) on every
+# install/upgrade/sync. Its input is assembled at runtime from:
+#   - the non-secret `config.*` values below (ConfigMap `optscale-config`),
+#   - credentials read from the component Secrets (MariaDB, Mongo, ...),
+#   - the encryption Secret and the optional secret-config overlay.
+# Application pods only receive HX_ETCD_HOST / HX_ETCD_PORT and read
+# everything else from etcd, blocking at startup until configuration is done.
 #
 # Install one release per namespace: component Services use fixed short names
 # (restapi, auth, mariadb, ...) which are also written into etcd config.
@@ -49,19 +52,34 @@ config:
   companyName: Hystax
   productName: OptScale
 
+  # Credentials are never set in values: secretsInit generates them into
+  # Secrets on first install (see the secretsInit section). The
+  # existingSecret-style keys below point the chart at Secrets you manage
+  # yourself (e.g. with External Secrets Operator) instead.
   secrets:
-    # Internal cluster API secret. CHANGE THIS before installing.
-    cluster: change-me-in-production
+    # Token for Hystax VM agents; unused by OptScale itself.
     agent: ""
-    # Name of a pre-existing Secret with key `cluster_secret` (e.g. managed
-    # by External Secrets Operator). When set, the chart does not render the
-    # cluster-secret Secret and `cluster` above is ignored by consumers.
+    # Secret with key `cluster_secret` — the internal service-to-service
+    # API token. Default: generated `cluster-secret`.
     existingSecret: ""
 
-  # Encryption material for stored credentials / user data.
-  encryptionKey: ""
-  encryptionSalt: ""
-  encryptionSaltAuth: ""
+  # Secret with keys `encryption-key` (Fernet key), `encryption-salt` (master
+  # secret for stored cloud credentials), `encryption-salt-auth` and
+  # `bi-encryption-key` (Fernet key). Default: generated `optscale-encryption`.
+  # These must never change after the first install.
+  existingEncryptionSecret: ""
+
+  # Pre-existing Secret with key `etcd.yaml`: secret-bearing configuration
+  # deep-merged into the etcd config at configure time — SMTP password, cloud
+  # service_credentials, Stripe keys, dataset-generator AWS keys, etc. Use
+  # etcd key names, e.g.
+  #   smtp:
+  #     password: ...
+  #   service_credentials:
+  #     aws: {access_key_id: ..., secret_access_key: ...}
+  # When empty the chart renders optscale-secret-config from the
+  # corresponding values (smtp.password, serviceCredentials, stripe.*, ...).
+  existingSecretConfig: ""
 
   # Set to true to let users log in without confirming their email address.
   disableEmailVerification: true
@@ -188,7 +206,6 @@ config:
 
   biSettings:
     exporterRunPeriod: 86400   # seconds (24h)
-    encryptionKey: 5t3X3PkQqF5edqW9_c8znow7k7GraZOpBLHhF1kFFvE=
     taskWaitTimeout: 259200    # seconds (3d)
 
   cleanmongodb:
@@ -248,6 +265,16 @@ config:
   # configurator config (advanced use).
   extra: {}
 
+# Generates missing credential Secrets before every install/upgrade/sync
+# (Helm pre-install/pre-upgrade hook — Argo CD runs it as PreSync). What to
+# generate is rendered into the optscale-secrets-spec ConfigMap. Existing
+# Secrets and keys are never modified, and Secrets referenced through an
+# existingSecret value are left entirely to you. To pin a specific value,
+# create the Secret (default name, expected keys) before installing.
+secretsInit:
+  enabled: true
+  resources: {}
+
 # Configurator bootstrap job.
 configurator:
   image: configurator
@@ -258,11 +285,6 @@ configurator:
   ttlSecondsAfterFinished: 3600
   backoffLimit: 10
   resources: {}
-  # Name of a pre-existing Secret with key `config` holding the full
-  # configurator YAML. When set, the chart does not render the
-  # optscale-config Secret and none of the `config.*` secret material is
-  # embedded in rendered manifests.
-  existingConfigSecret: ""
   # Argo CD support: run the configurator as a Sync-phase hook (static name,
   # recreated on every sync) instead of a revision-suffixed Job. Use this
   # when the chart is deployed by Argo CD — plain Jobs are immutable and
@@ -323,8 +345,8 @@ mariadb:
   image: mariadb
   imageTag: ""
   port: 3306
-  rootPassword: my-password-01
-  # Use an existing secret with key `password` instead of rootPassword.
+  # Secret with key `password` (root password). Default: generated
+  # `mariadb-secret`.
   existingSecret: ""
   maxConnections: 4096
   # Periodic logical backups (mysqldump) to a PVC.
@@ -346,21 +368,20 @@ mariadb:
 
 mongo:
   # Set external.enabled to use an external MongoDB instead of the bundled one.
+  # For an external MongoDB, create a Secret with key `url` (full connection
+  # URL, e.g. mongodb://user:pass@host:27017) and set existingSecret to it.
   external:
     enabled: false
-    # Full connection URL, e.g. mongodb://user:pass@host:27017
-    url: ""
   name: mongo
   image: mongo
   imageTag: ""
   servicePort: 80
   containerPort: 27017
+  # Admin user written into the generated mongo-secret.
   user: root
-  password: SecurePassword-01-02
-  # Replica set key file content (any long random string).
-  key: secureShardingKeyFFFDDa129
-  # Pre-existing Secret with keys `username`, `password`, `key.txt`;
-  # replaces the chart-rendered mongo-secret.
+  # Secret with keys `username`, `password`, `key.txt` (replica-set key file)
+  # for the bundled MongoDB, or `url` when external.enabled. Default:
+  # generated `mongo-secret` (bundled MongoDB only).
   existingSecret: ""
   cacheSizeGb: "1.0"
   persistence:
@@ -380,8 +401,8 @@ clickhouse:
   image: clickhouse/clickhouse-server:24.12
   db: default
   user: default
-  password: secure-password-1-clk
-  # Pre-existing Secret with key `password`; replaces clickhouse-secret.
+  # Secret with key `password`. Default: generated `clickhouse-secret`
+  # (bundled ClickHouse only — required when external.enabled).
   existingSecret: ""
   httpPort: 8123
   tcpPort: 9000
@@ -399,12 +420,10 @@ rabbitmq:
   image: rabbitmq:4.1.4-management-alpine
   port: 5672
   managementPort: 15672
+  # User written into the generated rabbit-secret.
   user: optscale
-  password: secure-password-here
-  erlangCookie: dWkhXehOApH1OHshvByfpfTf3Cd8wwkADei7mWd5JF
-  # Pre-existing Secret with keys `username`, `password`,
-  # `management-username`, `management-password`, `erlang-cookie` and
-  # `definitions.json`; replaces the chart-rendered rabbit-secret.
+  # Secret with keys `username`, `password`, `erlang-cookie`. Default:
+  # generated `rabbit-secret`.
   existingSecret: ""
   # In-broker memory ceiling (vm_memory_high_watermark.absolute), MB.
   memoryLimitMb: 512
@@ -450,9 +469,9 @@ minio:
   image: minio/minio:RELEASE.2020-03-19T21-49-00Z
   servicePort: 80
   containerPort: 9000
+  # Access key id written into the generated minio-secret.
   accessKey: optscale-minio
-  secretKey: secret_password
-  # Pre-existing Secret with keys `access`, `secret`; replaces minio-secret.
+  # Secret with keys `access`, `secret`. Default: generated `minio-secret`.
   existingSecret: ""
   persistence:
     enabled: true
@@ -470,9 +489,8 @@ thanos:
   enabled: true
   image: thanosio/thanos:v0.39.1
   bucket: thanos
-  # Pre-existing Secret with key `thanos_conf.yaml` (objstore config,
-  # including the MinIO keys); replaces the chart-rendered thanos-secret.
-  existingObjstoreSecret: ""
+  # Object storage is the bundled MinIO; Thanos reads its keys from the
+  # MinIO Secret (minio.existingSecret) via AWS_* environment variables.
   receive:
     name: thanos-receive
     replicaCount: 1

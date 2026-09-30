@@ -1,17 +1,5 @@
 {{- $cfg := .Values.mariadb }}
 {{- $image := include "optscale.image" (dict "root" . "repo" $cfg.image "tag" $cfg.imageTag) }}
-{{- if not $cfg.existingSecret }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: mariadb-secret
-  labels:
-    {{- include "optscale.labels" (dict "root" . "name" $cfg.name) | nindent 4 }}
-type: Opaque
-data:
-  password: {{ $cfg.rootPassword | b64enc | quote }}
-{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap

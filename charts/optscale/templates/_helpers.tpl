@@ -143,12 +143,23 @@ Input: chart root.
 {{- .Values.config.secrets.existingSecret | default "cluster-secret" -}}
 {{- end -}}
 
-{{- define "optscale.configSecretName" -}}
-{{- .Values.configurator.existingConfigSecret | default "optscale-config" -}}
+{{- define "optscale.encryptionSecretName" -}}
+{{- .Values.config.existingEncryptionSecret | default "optscale-encryption" -}}
 {{- end -}}
 
-{{- define "optscale.thanos.secretName" -}}
-{{- .Values.thanos.existingObjstoreSecret | default "thanos-secret" -}}
+{{- define "optscale.secretConfigName" -}}
+{{- .Values.config.existingSecretConfig | default "optscale-secret-config" -}}
+{{- end -}}
+
+{{/*
+Env var sourced from a Secret key. Input: dict with "name", "secret", "key".
+*/}}
+{{- define "optscale.secretEnv" -}}
+- name: {{ .name }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .secret }}
+      key: {{ .key }}
 {{- end -}}
 
 {{/*
