@@ -128,7 +128,7 @@ TLS options, pick one:
 
 | Section | What it controls |
 | --- | --- |
-| `global.*` | image registry/org/tag, pull policy, storage class, cluster domain, default scheduling |
+| `global.*` | image registry/org/tag, pull policy, storage class, cluster domain, default scheduling, `uvOffline` (run Python services from the image's baked virtualenv — no PyPI access at start) |
 | `config.*` | everything written to etcd: secrets, SMTP, OAuth, Slack, service credentials, feature settings |
 | `configurator.*` | bootstrap job behavior (`skipConfigUpdate` preserves manually edited etcd keys) |
 | `ingress.*` | ingress class, host, TLS/cert-manager |

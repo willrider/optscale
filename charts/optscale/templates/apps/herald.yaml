@@ -46,6 +46,7 @@ spec:
             - containerPort: {{ $cfg.containerPort }}
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.uvEnv" . | nindent 12 }}
             - name: HERALD_SERVICE
               value: api
           readinessProbe:
@@ -84,6 +85,7 @@ spec:
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.uvEnv" . | nindent 12 }}
             - name: HERALD_SERVICE
               value: engine
           {{- with $cfg.resources }}

@@ -29,6 +29,13 @@ global:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Run the Python services from the virtualenv baked into each image.
+  # Their `uv run` entrypoints otherwise re-sync the project at every start:
+  # they install the `dev` group the image build skipped and rebuild the
+  # editable local packages, both fetched from PyPI, so a transient DNS or
+  # network failure fails the pod (typically the scheduler CronJobs). Sets
+  # UV_NO_SYNC, UV_FROZEN and UV_OFFLINE on every uv-based container.
+  uvOffline: true
 
 # Image used by "wait for dependency" init containers.
 waitImage: busybox:1.37.0

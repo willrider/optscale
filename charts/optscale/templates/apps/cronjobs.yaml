@@ -52,6 +52,7 @@ spec:
               {{- end }}
               env:
                 {{- include "optscale.etcdEnv" $root | nindent 16 }}
+                {{- include "optscale.uvEnv" $root | nindent 16 }}
                 {{- include "optscale.extraEnv" (dict "root" $root "env" $cfg.extraEnv) | nindent 16 }}
               {{- with $cfg.resources }}
               resources:

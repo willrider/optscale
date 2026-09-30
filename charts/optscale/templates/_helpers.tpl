@@ -80,6 +80,22 @@ Environment variables pointing services at etcd. Input: chart root.
 {{- end -}}
 
 {{/*
+Environment for containers whose entrypoint is `uv run`: use the image's
+baked virtualenv instead of re-syncing it from PyPI at start (see
+global.uvOffline). Input: chart root.
+*/}}
+{{- define "optscale.uvEnv" -}}
+{{- if .Values.global.uvOffline -}}
+- name: UV_NO_SYNC
+  value: "1"
+- name: UV_FROZEN
+  value: "1"
+- name: UV_OFFLINE
+  value: "1"
+{{- end }}
+{{- end -}}
+
+{{/*
 Extra env entries; values are rendered through tpl so they may reference
 other values (e.g. "{{ .Values.config.fakeCadEnabled }}").
 Input: dict with "root" and "env" (list of {name,value}).

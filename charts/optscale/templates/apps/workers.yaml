@@ -36,6 +36,7 @@ spec:
           imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
           env:
             {{- include "optscale.etcdEnv" $root | nindent 12 }}
+            {{- include "optscale.uvEnv" $root | nindent 12 }}
             - name: OTEL_SERVICE_NAME
               value: {{ $cfg.name | quote }}
             - name: OTEL_SERVICE_VERSION

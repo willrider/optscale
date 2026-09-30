@@ -27,6 +27,7 @@ spec:
               image: {{ include "optscale.image" (dict "root" . "repo" $cfg.image) | quote }}
               imagePullPolicy: {{ .Values.global.imagePullPolicy }}
               env:
+                {{- include "optscale.uvEnv" . | nindent 16 }}
                 - name: HX_INFLUXDB_HOST
                   value: {{ .Values.influxdb.name | quote }}
                 - name: HX_INFLUXDB_PORT

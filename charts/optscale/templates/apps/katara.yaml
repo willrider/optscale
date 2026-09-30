@@ -47,6 +47,7 @@ spec:
             - containerPort: {{ $cfg.containerPort }}
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.uvEnv" . | nindent 12 }}
             - name: HX_KATARA_ROLE
               value: api
           readinessProbe:
@@ -85,6 +86,7 @@ spec:
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.uvEnv" . | nindent 12 }}
             - name: HX_KATARA_ROLE
               value: scheduler
           {{- with $cfg.resources }}
@@ -118,6 +120,7 @@ spec:
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.uvEnv" . | nindent 12 }}
           {{- with $cfg.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

@@ -41,6 +41,7 @@ spec:
           command: ["uv", "--project", "docker_images/configurator", "run", "python", "/config/base/configure.py"]
           env:
             {{- include "optscale.etcdEnv" . | nindent 12 }}
+            {{- include "optscale.uvEnv" . | nindent 12 }}
             {{- include "optscale.secretEnv" (dict "name" "MARIADB_PASSWORD" "secret" (include "optscale.mariadb.secretName" .) "key" "password") | nindent 12 }}
             {{- if .Values.mongo.external.enabled }}
             {{- include "optscale.secretEnv" (dict "name" "MONGO_URL" "secret" $mongo "key" "url") | nindent 12 }}
